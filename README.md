@@ -36,6 +36,12 @@ Then just run:
 ligmashark
 ```
 
+Or even easier if your on arch (You use arch btw)
+
+```bash
+yay -S ligmashark-git
+```
+
 ## ⌨️ Hotkeys
 
 | Key              | Action                              |
@@ -68,3 +74,4 @@ Ligmashark automatically uses **Ollama** + `qwen2.5:0.5b`:
 ## Why I Built This
 
 Because I got tired of guessing which Electron app or background service was phoning home. Now I can see everything in real time.
+
