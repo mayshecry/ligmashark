@@ -71,7 +71,6 @@ Because I got tired of guessing which Electron app or background service was pho
 
 ---
 
-```
 Can also be installed by running 
 
-yay -S ligmashark-git```
+yay -S ligmashark-git
