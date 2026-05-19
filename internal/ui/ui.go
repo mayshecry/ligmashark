@@ -20,6 +20,7 @@ var (
 	filterPrompt     = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render("Filter ISP: ")
 	filterInputStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	landingPageStyle = lipgloss.NewStyle().Align(lipgloss.Center).Padding(2, 4).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62"))
+	processSearchPrompt = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render("Search Process: ")
 	explStyle        = lipgloss.NewStyle().Align(lipgloss.Center).Width(60).MarginTop(1).MarginBottom(1)
 )
 
@@ -38,13 +39,14 @@ const (
 	FilterMode
 	PacketDetailMode
 	HelpMode
+	ProcessSearchMode
 )
 
 type Model struct {
 	List        CustomList
 	Viewport    CustomViewport
 	Processes   map[int32]*types.ProcItem
-	CapturePaused bool
+	CapturePaused *bool
 	CaptureStatus string
 	ProcessFilterSetting ProcessFilter
 	SelectedPid int32
@@ -54,6 +56,8 @@ type Model struct {
 	Mode        Mode
 	FilterInput string
 	ActiveFilter string
+	ProcessSearchInput string
+	ActiveProcessSearch string
 	SystemInfo  types.SystemInfo
 	VisiblePackets []types.PacketData
 	InspectedPacket types.PacketData
@@ -69,6 +73,7 @@ func NewModel(processes map[int32]*types.ProcItem, mu *sync.RWMutex, sysInfo typ
 		Viewport:  NewCustomViewport(),
 		SystemInfo: sysInfo,
 		Processes: processes,
+		CapturePaused: new(bool),
 		Mu:        mu,
 		PacketDetailViewport: NewCustomViewport(),
 		HelpViewport: NewCustomViewport(),
@@ -94,10 +99,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case PauseCaptureMsg:
-		m.CapturePaused = true
+		m.Mu.Lock()
+		*m.CapturePaused = true
+		m.Mu.Unlock()
 		m.CaptureStatus = "Paused"
 	case ResumeCaptureMsg:
-		m.CapturePaused = false
+		m.Mu.Lock()
+		*m.CapturePaused = false
+		m.Mu.Unlock()
 		m.CaptureStatus = "Running"
 	case tea.KeyMsg:
 		if m.Mode == HelpMode {
@@ -137,6 +146,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.FilterInput += msg.String()
 				}
 			}
+		} else if m.Mode == ProcessSearchMode {
+			switch msg.String() {
+			case "enter":
+				m.ActiveProcessSearch = m.ProcessSearchInput
+				m.Mode = NormalMode
+				m.refreshList()
+			case "esc":
+				m.ProcessSearchInput = ""
+				m.ActiveProcessSearch = ""
+				m.Mode = NormalMode
+				m.refreshList()
+			case "backspace":
+				if len(m.ProcessSearchInput) > 0 {
+					m.ProcessSearchInput = m.ProcessSearchInput[:len(m.ProcessSearchInput)-1]
+				}
+			default:
+				if len(msg.String()) == 1 {
+					m.ProcessSearchInput += msg.String()
+				}
+			}
 		} else {
 			switch msg.String() {
 			case "?":
@@ -156,6 +185,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.FilterInput = ""
 				m.Mode = FilterMode
 				m.FilterInput = m.ActiveFilter
+			case ";":
+				m.ProcessSearchInput = ""
+				m.Mode = ProcessSearchMode
+				m.ProcessSearchInput = m.ActiveProcessSearch
 			case "enter":
 				if i := m.List.SelectedItem(); i != nil {
 					m.SelectedPid = i.PID
@@ -273,7 +306,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		viewportHeight := msg.Height - 4
 
-		if m.Mode == FilterMode {
+		if m.Mode == FilterMode || m.Mode == ProcessSearchMode {
 			listHeight -= 1
 			viewportHeight -= 1
 		}
@@ -283,7 +316,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 	case AIResultMsg:
 		m.InspectedPacket.AIAnalysis = string(msg)
-		m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
+		m.PacketDetailViewport.UpdateContent(m.getPacketDetailContent())
 		return m, nil
 	case OllamaStatusMsg:
 		m.OllamaStatus = string(msg)
@@ -383,7 +416,9 @@ func (m *Model) refreshList() {
 	filteredItems := make([]types.ProcItem, 0)
 	for _, item := range items {
 		if m.shouldShowProcess(&item) {
-			filteredItems = append(filteredItems, item)
+			if m.ActiveProcessSearch == "" || strings.Contains(strings.ToLower(item.Name), strings.ToLower(m.ActiveProcessSearch)) {
+				filteredItems = append(filteredItems, item)
+			}
 		}
 	}
 
@@ -455,6 +490,15 @@ func (m Model) View() string {
 			filterPrompt,
 			filterInputStyle.Render(m.FilterInput+cursor),
 		)
+	} else if m.Mode == ProcessSearchMode {
+		cursor := " "
+		if m.CursorVisible {
+			cursor = "█"
+		}
+		bottomBar = lipgloss.JoinHorizontal(lipgloss.Left,
+			processSearchPrompt,
+			filterInputStyle.Render(m.ProcessSearchInput+cursor),
+		)
 	}
 
 	captureBar := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(" [P] " + m.CaptureStatus + " ")
@@ -463,10 +507,15 @@ func (m Model) View() string {
 		activeFilterBar = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" Active Filter: ") +
 			lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render(m.ActiveFilter)
 	}
+	activeProcessSearchBar := ""
+	if m.ActiveProcessSearch != "" {
+		activeProcessSearchBar = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" Process Search: ") +
+			lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render(m.ActiveProcessSearch)
+	}
 
 	processFilterBar := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(fmt.Sprintf(" [S] Filter: %s ", m.ProcessFilterSetting.String()))
 
-	footer := lipgloss.JoinHorizontal(lipgloss.Left, captureBar, processFilterBar, activeFilterBar)
+	footer := lipgloss.JoinHorizontal(lipgloss.Left, captureBar, processFilterBar, activeFilterBar, activeProcessSearchBar)
 	if bottomBar != "" {
 		footer = lipgloss.JoinVertical(lipgloss.Left, bottomBar, footer)
 	}
@@ -481,11 +530,16 @@ func (m Model) View() string {
 }
 
 func (m Model) IsCapturePaused() bool {
-	return m.CapturePaused
+	if m.CapturePaused == nil {
+		return false
+	}
+	m.Mu.RLock()
+	defer m.Mu.RUnlock()
+	return *m.CapturePaused
 }
 
 func (m *Model) toggleCaptureCmd() tea.Cmd {
-	if m.CapturePaused {
+	if m.IsCapturePaused() {
 		return func() tea.Msg { return ResumeCaptureMsg{} }
 	}
 	return func() tea.Msg { return PauseCaptureMsg{} }
@@ -570,10 +624,10 @@ func (m Model) renderLandingPage() string {
 	author := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("Created by heavenzone (@mayshecry) on GitHub")
 
 	explanation := explStyle.Render(
-"Ligmashark is a terminal-based network analyzer for Linux. " +
-"It tracks real-time traffic and maps it to processes (PIDs). " +
-"It identifies destination ISPs and offers a Neovim-style TUI " +
-"for packet inspection and payload analysis.");
+			"Ligmashark is a powerful, terminal-based network analyzer for Linux."  +
+			"It maps real-time network traffic to local processes (PIDs), " +
+			"identifies destination ISPs, and provides a Neovim-inspired TUI " +
+			"for deep packet inspection and payload analysis.")
 
 	specs := lipgloss.NewStyle().Padding(1, 2).SetString(fmt.Sprintf(`
 OS: %s
@@ -622,6 +676,7 @@ Navigation (Process List & Viewport):
 Traffic View:
   /                : Filter processes by ISP
   p                : Pause/Resume packet capture
+  ;                : Search/Filter process by name
 `
 	return lipgloss.JoinVertical(lipgloss.Left, title, style.Render(helpText), "\nPress 'Esc' or 'q' to return.")
 }
@@ -726,6 +781,10 @@ func (cv *CustomViewport) SetContent(content string) {
 	cv.scrollOffset = 0
 }
 
+func (cv *CustomViewport) UpdateContent(content string) {
+	cv.content = content
+}
+
 func (cv *CustomViewport) ScrollToEnd() {
 	lines := strings.Split(cv.content, "\n")
 	maxScroll := len(lines) - cv.Height
@@ -770,6 +829,7 @@ func (cv *CustomViewport) Update(msg tea.Msg) {
 				cv.scrollOffset = 0
 			}
 		case "down", "j":
+			cv.scrollOffset++
 			if cv.scrollOffset > maxScroll {
 				cv.scrollOffset = maxScroll
 			}

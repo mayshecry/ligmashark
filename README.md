@@ -1,76 +1,63 @@
-
 # 🦈 Ligmashark
 
-**Real-time network analyzer that actually shows you which process is talking to who.**
+Ligmashark is a powerful, terminal-based network analyzer for Linux designed for developers and security enthusiasts. Unlike traditional sniffers that show a wall of raw data, Ligmashark maps every incoming and outgoing packet to the specific **Process ID (PID)** and **Application Name** running on your system.
 
-Most network tools just vomit raw packets at you.  
-**Ligmashark** maps every connection directly to the **PID + Application**, tells you the ISP, and even uses local AI (Ollama) to explain what the f*ck is in the packet.
-
-Built for Arch/Chad Linux users, self-hosters, security autists, and people who like knowing what their machine is actually doing.
-
-![Ligmashark Preview](https://github.com/mayshecry/ligmashark/blob/main/screenshots/1.png)
-![Process View](https://github.com/mayshecry/ligmashark/blob/main/screenshots/2.png)
-![Packet Detail + AI Analysis](https://github.com/mayshecry/ligmashark/blob/main/screenshots/3.png)
-![Help Menu](https://github.com/mayshecry/ligmashark/blob/main/screenshots/4.png)
+It combines network telemetry with AI-powered payload analysis and automated ISP identification to give you a complete picture of your system's "chatter."
 
 ## ✨ Features
 
-- **Process-to-Packet Mapping** — See exactly which app/process is responsible for every connection
-- **Real-time ISP & Service Detection** — Identifies Discord, Minecraft, GitHub, browsers, etc.
-- **Local AI Packet Analysis** — Uses Ollama (qwen2.5) to explain payloads in plain English
-- **Clean Neovim-style TUI** — Beautiful, fast, and keyboard-driven
-- **Smart Filters** — Everything / Foreground apps only / Background services only
-- **Lightweight & Fast** — Written in Go with Bubble Tea + Lip Gloss
+*   **Process-to-Packet Mapping**: Automatically associates network traffic with local processes using socket-to-PID resolution.
+*   **ISP & Service Identification**: Real-time lookups for destination ISPs and common service signatures (e.g., Discord Voice, Minecraft, Web Browsers).
+*   **AI Payload Analysis**: Integrates with local Ollama instances (specifically `qwen2.5:0.5b`) to explain packet payloads in plain English.
+*   **Distro-Agnostic TUI**: A beautiful terminal interface built with Bubble Tea and Lip Gloss, featuring Neovim-inspired navigation.
+*   **Intelligent Filtering**: Toggle between viewing all traffic, only foreground applications, or only background system services.
 
 ## 🚀 Installation
 
+To install Ligmashark and all its dependencies (including `libpcap`), run the provided installation script:
+
 ```bash
-git clone https://github.com/mayshecry/ligmashark.git
-cd ligmashark
 chmod +x install.sh
 sudo ./install.sh
 ```
 
-Then just run:
-```bash
-ligmashark
-```
+This script will:
+1. Detect your Linux distribution (Ubuntu/Debian, Arch, or Fedora).
+2. Install necessary build tools and packet capture libraries.
+3. Compile the Go binary.
+4. Move the binary to `/usr/local/bin/ligmashark` for global access.
 
 ## ⌨️ Hotkeys
 
-| Key              | Action                              |
-|------------------|-------------------------------------|
-| `q` / `Esc`      | Quit / Go back                      |
-| `?`              | Toggle Help Menu                    |
-| `j` / `k`        | Navigate process list               |
-| `Enter`          | Select process + view packet details|
-| `u` / `d`        | Scroll packet viewport              |
-| `/`              | Filter by ISP                       |
-| `p`              | Pause/Resume capture                |
-| `s`              | Cycle filter mode                   |
-| `h`              | Return to home screen               |
+| Key | Action |
+|-----|--------|
+| `q` / `Esc` | Quit Ligmashark / Return to previous view |
+| `?` | Toggle Help Menu |
+| `j` / `k` | Navigate process list (Up/Down) |
+| `Enter` | Select process / Open detailed packet inspection |
+| `u` / `d` | Scroll traffic viewport (Up/Down) |
+| `/` | Filter processes by ISP string |
+| `p` | Pause/Resume real-time packet capture |
+| `s` | Cycle Process Filter (Everything ➔ Foreground ➔ Background) |
+| `h` | Return to Landing Page |
 
-## 🧠 AI Analysis
+## 🧠 AI Analysis Setup
 
-Ligmashark automatically uses **Ollama** + `qwen2.5:0.5b`:
-
+Ligmashark uses **Ollama** for local AI processing.
 1. Install Ollama: `curl -fsSL https://ollama.com/install.sh | sh`
-2. Run `ollama run qwen2.5:0.5b` once (or let Ligmashark pull it)
-3. Select any packet → Press Enter → Get AI breakdown
+2. Ligmashark will automatically attempt to start the Ollama server and pull the `qwen2.5:0.5b` model on first launch if they aren't available.
+3. Once ready, select a packet and press `Enter` to see the AI's technical breakdown of the payload.
 
 ## 🛠️ Requirements
 
-- Linux (Arch, Debian, Fedora tested)
-- Root / `CAP_NET_RAW` privileges (for packet capture)
-- Go 1.22+ (only needed if building manually)
-- Ollama (for AI features)
+*   **Go**: 1.22 or higher.
+*   **Privileges**: Packet capture requires root/sudo privileges (the app will prompt for elevation automatically if needed).
+*   **Dependencies**: `libpcap` (installed via `install.sh`).
 
-## Why I Built This
+## 🤝 Contributing
 
-Because I got tired of guessing which Electron app or background service was phoning home. Now I can see everything in real time.
+Created by **heavenzone** (@mayshecry on GitHub). Feel free to open issues or submit pull requests to improve the protocol analysis or service identification logic.
 
----
+## Future?
 
-Can also be installed by running 
-
-yay -S ligmashark-git
+I'll be working on windows support but as i daily drive linux that just made more sense >,<
