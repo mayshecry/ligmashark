@@ -570,10 +570,10 @@ func (m Model) renderLandingPage() string {
 	author := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("Created by heavenzone (@mayshecry) on GitHub")
 
 	explanation := explStyle.Render(
-			"Ligmashark is a powerful, terminal-based network analyzer for Linux."  +
-			"It maps real-time network traffic to local processes (PIDs), " +
-			"identifies destination ISPs, and provides a Neovim-inspired TUI " +
-			"for deep packet inspection and payload analysis.")
+"Ligmashark is a terminal-based network analyzer for Linux. " +
+"It tracks real-time traffic and maps it to processes (PIDs). " +
+"It identifies destination ISPs and offers a Neovim-style TUI " +
+"for packet inspection and payload analysis.");
 
 	specs := lipgloss.NewStyle().Padding(1, 2).SetString(fmt.Sprintf(`
 OS: %s
