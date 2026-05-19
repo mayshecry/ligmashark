@@ -70,3 +70,8 @@ Ligmashark automatically uses **Ollama** + `qwen2.5:0.5b`:
 Because I got tired of guessing which Electron app or background service was phoning home. Now I can see everything in real time.
 
 ---
+
+```
+Can also be installed by running 
+
+yay -S ligmashark-git```
