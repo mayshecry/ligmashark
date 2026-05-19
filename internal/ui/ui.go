@@ -1,0 +1,801 @@
+package ui
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+	"github.com/shirou/gopsutil/v3/process"
+	"os/exec"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"ligmashark/internal/ai"
+	"ligmashark/internal/types"
+)
+
+var (
+	docStyle         = lipgloss.NewStyle().Margin(1, 2)
+	filterPrompt     = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render("Filter ISP: ")
+	filterInputStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	landingPageStyle = lipgloss.NewStyle().Align(lipgloss.Center).Padding(2, 4).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62"))
+	explStyle        = lipgloss.NewStyle().Align(lipgloss.Center).Width(60).MarginTop(1).MarginBottom(1)
+)
+
+type UpdateMsg struct{}
+
+type AIResultMsg string
+type OllamaStatusMsg string
+type PauseCaptureMsg struct{}
+type ResumeCaptureMsg struct{}
+
+type Mode int
+
+const (
+	NormalMode Mode = iota
+	LandingPageMode
+	FilterMode
+	PacketDetailMode
+	HelpMode
+)
+
+type Model struct {
+	List        CustomList
+	Viewport    CustomViewport
+	Processes   map[int32]*types.ProcItem
+	CapturePaused bool
+	CaptureStatus string
+	ProcessFilterSetting ProcessFilter
+	SelectedPid int32
+	Mu          *sync.RWMutex
+	Width       int
+	Height      int
+	Mode        Mode
+	FilterInput string
+	ActiveFilter string
+	SystemInfo  types.SystemInfo
+	VisiblePackets []types.PacketData
+	InspectedPacket types.PacketData
+	PacketDetailViewport CustomViewport
+	HelpViewport CustomViewport
+	OllamaStatus string
+	CursorVisible bool
+}
+
+func NewModel(processes map[int32]*types.ProcItem, mu *sync.RWMutex, sysInfo types.SystemInfo) Model {
+	return Model{
+		List:      NewCustomList("Processes"),
+		Viewport:  NewCustomViewport(),
+		SystemInfo: sysInfo,
+		Processes: processes,
+		Mu:        mu,
+		PacketDetailViewport: NewCustomViewport(),
+		HelpViewport: NewCustomViewport(),
+		ProcessFilterSetting: FilterEverything,
+		CaptureStatus: "Running",
+		OllamaStatus: "Initializing Ollama...",
+		Mode:      LandingPageMode,
+	}
+}
+
+func (m Model) Init() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return UpdateMsg{}
+	})
+}
+
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		if km.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+	}
+
+	switch msg := msg.(type) {
+	case PauseCaptureMsg:
+		m.CapturePaused = true
+		m.CaptureStatus = "Paused"
+	case ResumeCaptureMsg:
+		m.CapturePaused = false
+		m.CaptureStatus = "Running"
+	case tea.KeyMsg:
+		if m.Mode == HelpMode {
+			switch msg.String() {
+			case "esc", "q", "?":
+				m.Mode = NormalMode
+			}
+		} else if m.Mode == PacketDetailMode {
+			switch msg.String() {
+			case "esc", "q", "backspace":
+				m.Mode = NormalMode
+			default:
+				m.PacketDetailViewport.Update(msg)
+			}
+		} else if m.Mode == LandingPageMode {
+			switch msg.String() {
+			case "q", "enter", "esc", "h":
+				m.Mode = NormalMode
+			}
+		} else if m.Mode == FilterMode {
+			switch msg.String() {
+			case "enter":
+				m.ActiveFilter = m.FilterInput
+				m.Mode = NormalMode
+				m.updateViewport()
+			case "esc":
+				m.FilterInput = ""
+				m.ActiveFilter = ""
+				m.Mode = NormalMode
+				m.updateViewport()
+			case "backspace":
+				if len(m.FilterInput) > 0 {
+					m.FilterInput = m.FilterInput[:len(m.FilterInput)-1]
+				}
+			default:
+				if len(msg.String()) == 1 {
+					m.FilterInput += msg.String()
+				}
+			}
+		} else {
+			switch msg.String() {
+			case "?":
+				m.Mode = HelpMode
+				m.HelpViewport.SetContent(m.renderHelpMenuContent())
+				return m, nil
+			case "p":
+				return m, m.toggleCaptureCmd()
+			case "s":
+				m.cycleProcessFilter()
+				return m, nil
+
+			case "h", "home", "q":
+				m.Mode = LandingPageMode
+				return m, nil
+			case "/":
+				m.FilterInput = ""
+				m.Mode = FilterMode
+				m.FilterInput = m.ActiveFilter
+			case "enter":
+				if i := m.List.SelectedItem(); i != nil {
+					m.SelectedPid = i.PID
+					m.updateViewport()
+				}
+			case "up", "down", "j", "k":
+				m.List.Update(msg)
+				if i := m.List.SelectedItem(); i != nil {
+					m.SelectedPid = i.PID
+					m.updateViewport()
+				}
+			case "pgup", "pgdown", "u", "d":
+				m.Viewport.Update(msg)
+			}
+		}
+
+	case tea.MouseMsg:
+		if m.Mode == LandingPageMode {
+			if msg.Type == tea.MouseLeft {
+				m.Mode = NormalMode
+			}
+		} else if m.Mode == PacketDetailMode {
+			if msg.Type == tea.MouseLeft {
+				m.Mode = NormalMode
+				return m, nil
+			}
+			if msg.Type == tea.MouseWheelUp {
+				m.PacketDetailViewport.Update(tea.KeyMsg{Type: tea.KeyUp})
+			} else if msg.Type == tea.MouseWheelDown {
+				m.PacketDetailViewport.Update(tea.KeyMsg{Type: tea.KeyDown})
+			}
+		} else if m.Mode == NormalMode {
+			if msg.Type == tea.MouseLeft {
+				if msg.X >= m.Width/3+4 && msg.X < m.Width-2 {
+					row := msg.Y - 1
+					if row >= 4 {
+						pktIdx := row - 4 + m.Viewport.scrollOffset
+						if pktIdx >= 0 && pktIdx < len(m.VisiblePackets) {
+							m.InspectedPacket = m.VisiblePackets[pktIdx]
+							m.Mode = PacketDetailMode
+							m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
+							m.InspectedPacket.AIAnalysis = ""
+							return m, m.analyzePacketCmd(m.InspectedPacket)
+						}
+					}
+				}
+
+				if msg.X >= 2 && msg.X < m.List.Width+2 && msg.Y >= 1 && msg.Y < m.List.Height+1 {
+					row := msg.Y - 1
+					if row >= 2 {
+						visibleIdx := row - 2
+						start := 0
+						if m.List.selected >= m.List.Height-2 {
+							start = m.List.selected - (m.List.Height - 3)
+						}
+						if start < 0 {
+							start = 0
+						}
+						target := start + visibleIdx
+						if target >= 0 && target < len(m.List.items) {
+							m.List.selected = target
+							if i := m.List.SelectedItem(); i != nil {
+								m.SelectedPid = i.PID
+								m.updateViewport()
+							}
+						}
+					}
+				}
+			}
+
+			if msg.Type == tea.MouseLeft {
+				if msg.Y >= m.Height-1 {
+					return m, m.toggleCaptureCmd()
+				}
+			} else if msg.Type == tea.MouseWheelUp {
+				if msg.X < m.List.Width+2 {
+					m.List.Update(tea.KeyMsg{Type: tea.KeyUp})
+					if i := m.List.SelectedItem(); i != nil {
+						m.SelectedPid = i.PID
+						m.updateViewport()
+					}
+				} else {
+					m.Viewport.Update(tea.KeyMsg{Type: tea.KeyUp})
+				}
+			} else if msg.Type == tea.MouseWheelDown {
+				if msg.X < m.List.Width+2 {
+					m.List.Update(tea.KeyMsg{Type: tea.KeyDown})
+					if i := m.List.SelectedItem(); i != nil {
+						m.SelectedPid = i.PID
+						m.updateViewport()
+					}
+				} else {
+					m.Viewport.Update(tea.KeyMsg{Type: tea.KeyDown})
+				}
+			}
+		}
+
+	case tea.WindowSizeMsg:
+		m.Width = msg.Width
+		m.Height = msg.Height
+		listWidth := msg.Width / 3
+		viewportWidth := msg.Width - listWidth - 4
+		listHeight := msg.Height - 4
+
+		m.PacketDetailViewport.SetSize(m.Width-4, m.Height-2)
+		m.HelpViewport.SetSize(m.Width-4, m.Height-2)
+		if m.Mode == PacketDetailMode {
+			m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
+			return m, nil
+		}
+		if m.Mode == HelpMode {
+			m.HelpViewport.SetContent(m.renderHelpMenuContent())
+			return m, nil
+		}
+
+		viewportHeight := msg.Height - 4
+
+		if m.Mode == FilterMode {
+			listHeight -= 1
+			viewportHeight -= 1
+		}
+
+		m.List.SetSize(listWidth, listHeight)
+		m.Viewport.SetSize(viewportWidth, viewportHeight)
+		m.updateViewport()
+	case AIResultMsg:
+		m.InspectedPacket.AIAnalysis = string(msg)
+		m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
+		return m, nil
+	case OllamaStatusMsg:
+		m.OllamaStatus = string(msg)
+		return m, nil
+	case UpdateMsg:
+		m.CursorVisible = !m.CursorVisible
+		m.refreshList()
+		return m, tea.Tick(time.Second, func(t time.Time) tea.Msg {
+			return UpdateMsg{}
+		})
+	}
+	return m, nil
+}
+
+func (m *Model) analyzePacketCmd(pkt types.PacketData) tea.Cmd {
+	return func() tea.Msg {
+		analysis, err := ai.AnalyzePayload(pkt)
+		if err != nil {
+			return AIResultMsg("AI Analysis failed: " + err.Error())
+		}
+		return AIResultMsg(analysis)
+	}
+}
+
+func (m *Model) SetupOllama(p *tea.Program) {
+	status := func(s string) {
+		if p != nil {
+			p.Send(OllamaStatusMsg(s))
+		}
+	}
+
+	var lastStatus string
+	update := func(s string) {
+		lastStatus = s
+		status(s)
+	}
+
+	update("Checking Ollama server...")
+	if !ai.CheckOllamaServer() {
+		update("Ollama server not running. Attempting to start 'ollama serve' in background...")
+		err := ai.StartOllamaServer()
+		if err != nil {
+			update(fmt.Sprintf("Failed to start Ollama: %v. Please start it manually.", err))
+			return
+		}
+		time.Sleep(5 * time.Second)
+		if !ai.CheckOllamaServer() {
+			update("Ollama server did not start. Please check your Ollama installation.")
+			return
+		}
+	}
+	update("Ollama server is running.")
+
+	modelName := "qwen2.5:0.5b"
+	update(fmt.Sprintf("Checking for model '%s'...", modelName))
+	installed, err := ai.CheckModelInstalled(modelName)
+	if err != nil {
+		update(fmt.Sprintf("Error checking model: %v", err))
+		return
+	}
+
+	if !installed {
+		update(fmt.Sprintf("Model '%s' not found. Attempting to pull...", modelName))
+		pullCmd := exec.Command("ollama", "pull", modelName)
+		output, err := pullCmd.CombinedOutput()
+		if err != nil {
+			update(fmt.Sprintf("Failed to pull model '%s': %v\nOutput: %s", modelName, err, string(output)))
+			return
+		}
+		update(fmt.Sprintf("Model '%s' pulled successfully.", modelName))
+	} else {
+		update(fmt.Sprintf("Model '%s' is installed.", modelName))
+	}
+
+	if lastStatus == fmt.Sprintf("Model '%s' is installed.", modelName) || lastStatus == fmt.Sprintf("Model '%s' pulled successfully.", modelName) {
+		status("Ollama ready for AI analysis.")
+	} else {
+		status("Ollama setup failed: " + lastStatus)
+	}
+}
+
+func (m *Model) refreshList() {
+	m.Mu.RLock()
+	items := make([]types.ProcItem, 0, len(m.Processes))
+	for _, p := range m.Processes {
+		items = append(items, *p)
+	}
+	m.Mu.RUnlock()
+
+	sort.Slice(items, func(i, j int) bool {
+		if len(items[i].Packets) != len(items[j].Packets) {
+			return len(items[i].Packets) > len(items[j].Packets)
+		}
+		return items[i].PID < items[j].PID
+	})
+
+	filteredItems := make([]types.ProcItem, 0)
+	for _, item := range items {
+		if m.shouldShowProcess(&item) {
+			filteredItems = append(filteredItems, item)
+		}
+	}
+
+	m.List.SetItems(filteredItems)
+	m.updateViewport()
+}
+
+func (m *Model) updateViewport() {
+	m.Mu.RLock()
+	defer m.Mu.RUnlock()
+
+	if p, ok := m.Processes[m.SelectedPid]; ok {
+		var buf strings.Builder
+		buf.WriteString(fmt.Sprintf("Traffic for %s (PID: %d)\n\n", p.Name, p.PID))
+		headerStyle := lipgloss.NewStyle().MaxWidth(m.Viewport.Width).MaxHeight(1)
+		buf.WriteString(headerStyle.Render(fmt.Sprintf("%-8s %-15s %-15s %-20s %-15s %s", "PROTO", "SOURCE", "DEST", "ISP", "SERVICE", "LEN")) + "\n")
+		buf.WriteString(strings.Repeat("-", m.Viewport.Width) + "\n")
+
+		filteredPackets := make([]types.PacketData, 0)
+		if m.ActiveFilter != "" {
+			for _, pkt := range p.Packets {
+				if strings.Contains(strings.ToLower(pkt.ISP), strings.ToLower(m.ActiveFilter)) {
+					filteredPackets = append(filteredPackets, pkt)
+				}
+			}
+		} else {
+			filteredPackets = p.Packets
+		}
+
+		displayCount := 50
+		if len(filteredPackets) < displayCount {
+			displayCount = len(filteredPackets)
+		}
+
+		m.VisiblePackets = nil
+		for i := len(filteredPackets) - 1; i >= len(filteredPackets)-displayCount; i-- {
+			pkt := filteredPackets[i]
+			m.VisiblePackets = append(m.VisiblePackets, pkt)
+			line := fmt.Sprintf("%-8s %-15s %-15s %-20s %-15s %d", pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ISP, pkt.Service, pkt.Length)
+			buf.WriteString(lipgloss.NewStyle().MaxWidth(m.Viewport.Width).MaxHeight(1).Render(line) + "\n")
+		}
+		m.Viewport.SetContent(buf.String())
+		m.Viewport.ScrollToEnd()
+	}
+}
+
+func (m Model) View() string {
+	if m.Mode == LandingPageMode {
+		return m.renderLandingPage()
+	}
+	if m.Mode == PacketDetailMode {
+		return m.PacketDetailViewport.View()
+	}
+	if m.Mode == HelpMode {
+		m.HelpViewport.SetContent(m.renderHelpMenuContent())
+		return m.HelpViewport.View()
+	}
+
+	listRender := m.List.View()
+	viewportRender := m.Viewport.View()
+
+	var bottomBar string
+	if m.Mode == FilterMode {
+		cursor := " "
+		if m.CursorVisible {
+			cursor = "█"
+		}
+		bottomBar = lipgloss.JoinHorizontal(lipgloss.Left,
+			filterPrompt,
+			filterInputStyle.Render(m.FilterInput+cursor),
+		)
+	}
+
+	captureBar := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(" [P] " + m.CaptureStatus + " ")
+	activeFilterBar := ""
+	if m.ActiveFilter != "" {
+		activeFilterBar = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" Active Filter: ") +
+			lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render(m.ActiveFilter)
+	}
+
+	processFilterBar := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(fmt.Sprintf(" [S] Filter: %s ", m.ProcessFilterSetting.String()))
+
+	footer := lipgloss.JoinHorizontal(lipgloss.Left, captureBar, processFilterBar, activeFilterBar)
+	if bottomBar != "" {
+		footer = lipgloss.JoinVertical(lipgloss.Left, bottomBar, footer)
+	}
+
+	mainContent := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		docStyle.Render(listRender),
+		docStyle.Render(viewportRender),
+	)
+
+	return lipgloss.JoinVertical(lipgloss.Left, mainContent, footer)
+}
+
+func (m Model) IsCapturePaused() bool {
+	return m.CapturePaused
+}
+
+func (m *Model) toggleCaptureCmd() tea.Cmd {
+	if m.CapturePaused {
+		return func() tea.Msg { return ResumeCaptureMsg{} }
+	}
+	return func() tea.Msg { return PauseCaptureMsg{} }
+}
+
+func (m Model) getPacketDetailContent() string {
+	width := m.PacketDetailViewport.Width
+	style := lipgloss.NewStyle().Width(width)
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).Render("Packet Overview")
+	
+	aiText := m.InspectedPacket.AIAnalysis
+	if aiText == "" {
+		aiText = "Analyzing payload with qwen2.5:0.5b..."
+	}
+
+	details := fmt.Sprintf(
+		"Timestamp: %s\nProtocol:  %s\nLength:    %d bytes\n\n"+
+		"Source:      %s:%s\nDestination: %s:%s\nISP:         %s\n\n"+
+		"AI Analysis (qwen2.5:0.5b):\n%s\n\n"+
+		"Payload:\n%s",
+		m.InspectedPacket.Timestamp.Format("15:04:05.000"),
+		m.InspectedPacket.Protocol,
+		m.InspectedPacket.Length,
+		m.InspectedPacket.SrcIP, m.InspectedPacket.SrcPort,
+		m.InspectedPacket.DstIP, m.InspectedPacket.DstPort,
+		m.InspectedPacket.ISP,
+		aiText,
+		m.InspectedPacket.Payload,
+	)
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\nPress 'Esc' or 'q' to return")
+	content := lipgloss.JoinVertical(lipgloss.Left, title, style.Render(details), help)
+	return content
+}
+
+type ProcessFilter int
+
+const (
+	FilterEverything ProcessFilter = iota
+	FilterForeground
+	FilterBackground
+)
+
+func (pf ProcessFilter) String() string {
+	switch pf {
+	case FilterEverything: return "Everything"
+	case FilterForeground: return "Only Foreground apps"
+	case FilterBackground: return "Only Background Apps"
+	}
+	return "Unknown"
+}
+
+func (m *Model) cycleProcessFilter() {
+	m.ProcessFilterSetting = (m.ProcessFilterSetting + 1) % 3
+	m.refreshList()
+}
+
+func (m Model) shouldShowProcess(p *types.ProcItem) bool {
+	if m.ProcessFilterSetting == FilterEverything {
+		return true
+	}
+	
+	proc, err := process.NewProcess(p.PID)
+	if err != nil {
+		return false
+	}
+	isBackground, err := proc.Background()
+	if err != nil {
+		return false
+	}
+
+	if m.ProcessFilterSetting == FilterForeground && !isBackground {
+		return true
+	}
+	if m.ProcessFilterSetting == FilterBackground && isBackground {
+		return true
+	}
+	return false
+}
+
+func (m Model) renderLandingPage() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).SetString("Ligmashark")
+	author := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("Created by heavenzone (@mayshecry) on GitHub")
+
+	explanation := explStyle.Render(
+			"Ligmashark is a powerful, terminal-based network analyzer for Linux."  +
+			"It maps real-time network traffic to local processes (PIDs), " +
+			"identifies destination ISPs, and provides a Neovim-inspired TUI " +
+			"for deep packet inspection and payload analysis.")
+
+	specs := lipgloss.NewStyle().Padding(1, 2).SetString(fmt.Sprintf(`
+OS: %s
+Hostname: %s
+CPU: %s
+Memory: %s
+Uptime: %s
+Go Version: %s
+`, m.SystemInfo.OS, m.SystemInfo.Hostname, m.SystemInfo.CPU, m.SystemInfo.Memory, m.SystemInfo.Uptime, m.SystemInfo.GoVersion))
+	
+	ollamaStatus := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).SetString(m.OllamaStatus)
+
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("\nPress 'q', 'h', or 'Enter' to start monitoring.")
+
+	content := lipgloss.JoinVertical(lipgloss.Center,
+		title.Render(),
+		author.Render(),
+		explanation,
+		ollamaStatus.Render(),
+		specs.Render(),
+		help.Render(),
+	)
+
+	return landingPageStyle.Width(m.Width - 4).Height(m.Height - 2).Render(content)
+}
+
+func (m Model) renderHelpMenuContent() string {
+	width := m.HelpViewport.Width
+	style := lipgloss.NewStyle().Width(width)
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).Render("Ligmashark Hotkeys")
+	
+	helpText := `
+Global:
+  q / Esc / Ctrl+C : Quit Ligmashark
+  ?                : Toggle this Help Menu
+
+Navigation (Process List & Viewport):
+  j / Down Arrow   : Move down
+  k / Up Arrow     : Move up
+  Enter            : Select process / Open packet detail
+  u / PgUp         : Scroll viewport up
+  d / PgDown       : Scroll viewport down
+  Mouse Wheel      : Scroll viewport
+  Left Click       : Select process / Open packet detail / Exit detail/help
+
+Traffic View:
+  /                : Filter processes by ISP
+  p                : Pause/Resume packet capture
+`
+	return lipgloss.JoinVertical(lipgloss.Left, title, style.Render(helpText), "\nPress 'Esc' or 'q' to return.")
+}
+
+type CustomList struct {
+	title        string
+	items        []types.ProcItem
+	selected     int
+	Width, Height int
+}
+
+func NewCustomList(title string) CustomList {
+	return CustomList{
+		title: title,
+	}
+}
+
+func (cl *CustomList) SetItems(items []types.ProcItem) {
+	cl.items = items
+	if cl.selected >= len(cl.items) {
+		cl.selected = len(cl.items) - 1
+	}
+	if cl.selected < 0 && len(cl.items) > 0 {
+		cl.selected = 0
+	}
+}
+
+func (cl *CustomList) SelectedItem() *types.ProcItem {
+	if len(cl.items) == 0 || cl.selected < 0 || cl.selected >= len(cl.items) {
+		return nil
+	}
+	return &cl.items[cl.selected]
+}
+
+func (cl *CustomList) SetSize(width, height int) {
+	cl.Width = width
+	cl.Height = height
+}
+
+func (cl *CustomList) Update(msg tea.Msg) {
+	if len(cl.items) == 0 {
+		return
+	}
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "up", "k":
+			cl.selected--
+			if cl.selected < 0 {
+				cl.selected = 0
+			}
+		case "down", "j":
+			cl.selected++
+			if cl.selected >= len(cl.items) {
+				cl.selected = len(cl.items) - 1
+			}
+		}
+	}
+}
+
+func (cl CustomList) View() string {
+	var sb strings.Builder
+	sb.WriteString(lipgloss.NewStyle().Bold(true).Render(cl.title) + "\n")
+	sb.WriteString(strings.Repeat("-", cl.Width) + "\n")
+
+	start := 0
+	if cl.selected >= cl.Height-2 {
+		start = cl.selected - (cl.Height - 3)
+	}
+	if start < 0 {
+		start = 0
+	}
+
+	end := start + cl.Height - 2
+	if end > len(cl.items) {
+		end = len(cl.items)
+	}
+
+	for i := start; i < end; i++ {
+		item := cl.items[i]
+		line := fmt.Sprintf("%s (%d) [%d]", item.Name, item.PID, len(item.Packets))
+		if i == cl.selected {
+			line = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Render(line)
+		}
+		sb.WriteString(lipgloss.NewStyle().MaxWidth(cl.Width).MaxHeight(1).Render(line) + "\n")
+	}
+	return sb.String()
+}
+
+type CustomViewport struct {
+	content    string
+	scrollOffset int
+	selected int
+	Width, Height int
+}
+
+func NewCustomViewport() CustomViewport {
+	return CustomViewport{}
+}
+
+func (cv *CustomViewport) SetContent(content string) {
+	cv.content = content
+	cv.scrollOffset = 0
+}
+
+func (cv *CustomViewport) ScrollToEnd() {
+	lines := strings.Split(cv.content, "\n")
+	maxScroll := len(lines) - cv.Height
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	cv.scrollOffset = maxScroll
+}
+
+func (cv *CustomViewport) SetSize(width, height int) {
+	cv.Width = width
+	cv.Height = height
+}
+
+func (cv *CustomViewport) Update(msg tea.Msg) {
+	lines := strings.Split(cv.content, "\n")
+	maxScroll := len(lines) - cv.Height
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch km.String() {
+		case "pgup":
+			cv.scrollOffset -= cv.Height / 2
+			if cv.scrollOffset < 0 {
+				cv.scrollOffset = 0
+			}
+		case "pgdown":
+			cv.scrollOffset += cv.Height / 2
+			if cv.scrollOffset > maxScroll {
+				cv.scrollOffset = maxScroll
+			}
+
+			if cv.selected != cv.scrollOffset {
+				cv.selected = cv.scrollOffset
+			}
+
+		case "up", "k":
+			cv.scrollOffset--
+			if cv.scrollOffset < 0 {
+				cv.scrollOffset = 0
+			}
+		case "down", "j":
+			if cv.scrollOffset > maxScroll {
+				cv.scrollOffset = maxScroll
+			}
+		}
+	}
+}
+
+func (cv CustomViewport) View() string {
+	lines := strings.Split(cv.content, "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+
+	start := cv.scrollOffset
+	end := start + cv.Height
+	if end > len(lines) {
+		end = len(lines)
+	}
+
+	var sb strings.Builder
+	for i := start; i < end; i++ {
+		if i < len(lines) {
+			sb.WriteString(lipgloss.NewStyle().MaxWidth(cv.Width).MaxHeight(1).Render(lines[i]) + "\n")
+		} else {
+			sb.WriteString(strings.Repeat(" ", cv.Width) + "\n")
+		}
+	}
+	return sb.String()
+}
