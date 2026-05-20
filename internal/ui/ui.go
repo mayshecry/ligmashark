@@ -639,7 +639,7 @@ func (m Model) shouldShowProcess(p *types.ProcItem) bool {
 
 func (m Model) renderLandingPage() string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).SetString("Ligmashark")
-	author := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("Created by heavenzone (@mayshecry) on GitHub")
+	author := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("Created by val (@mayshecry) on GitHub")
 
 	explanation := explStyle.Render(
 			"Ligmashark is a powerful, terminal-based network analyzer for Linux."  +
