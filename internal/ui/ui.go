@@ -457,8 +457,20 @@ func (m *Model) updateViewport() {
 		for i := len(filteredPackets) - 1; i >= len(filteredPackets)-displayCount; i-- {
 			pkt := filteredPackets[i]
 			m.VisiblePackets = append(m.VisiblePackets, pkt)
-			line := fmt.Sprintf("%-8s %-15s %-15s %-20s %-15s %d", pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ISP, pkt.Service, pkt.Length)
-			buf.WriteString(lipgloss.NewStyle().MaxWidth(m.Viewport.Width).MaxHeight(1).Render(line) + "\n")
+
+			info := pkt.Service
+			if pkt.HTTPStatus != "" {
+				info = "HTTP " + pkt.HTTPStatus
+			} else if pkt.HTTPMethod != "" {
+				info = pkt.HTTPMethod
+			}
+
+			line := fmt.Sprintf("%-8s %-15s %-15s %-20s %-15s %d", pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ISP, info, pkt.Length)
+			style := lipgloss.NewStyle().MaxWidth(m.Viewport.Width).MaxHeight(1)
+			if pkt.IsMalicious {
+				style = style.Foreground(lipgloss.Color("9")) // Red
+			}
+			buf.WriteString(style.Render(line) + "\n")
 		}
 		m.Viewport.SetContent(buf.String())
 		m.Viewport.ScrollToEnd()
@@ -555,14 +567,20 @@ func (m Model) getPacketDetailContent() string {
 		aiText = "Analyzing payload with qwen2.5:0.5b..."
 	}
 
+	maliciousStatus := "No"
+	if m.InspectedPacket.IsMalicious {
+		maliciousStatus = "YES (Detected by ThreatFox)"
+	}
+
 	details := fmt.Sprintf(
-		"Timestamp: %s\nProtocol:  %s\nLength:    %d bytes\n\n"+
+		"Timestamp: %s\nProtocol:  %s\nLength:    %d bytes\nMalicious: %s\n\n"+
 		"Source:      %s:%s\nDestination: %s:%s\nISP:         %s\n\n"+
 		"AI Analysis (qwen2.5:0.5b):\n%s\n\n"+
 		"Payload:\n%s",
 		m.InspectedPacket.Timestamp.Format("15:04:05.000"),
 		m.InspectedPacket.Protocol,
 		m.InspectedPacket.Length,
+		maliciousStatus,
 		m.InspectedPacket.SrcIP, m.InspectedPacket.SrcPort,
 		m.InspectedPacket.DstIP, m.InspectedPacket.DstPort,
 		m.InspectedPacket.ISP,
@@ -757,10 +775,14 @@ func (cl CustomList) View() string {
 	for i := start; i < end; i++ {
 		item := cl.items[i]
 		line := fmt.Sprintf("%s (%d) [%d]", item.Name, item.PID, len(item.Packets))
-		if i == cl.selected {
-			line = lipgloss.NewStyle().Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230")).Render(line)
+		style := lipgloss.NewStyle().MaxWidth(cl.Width).MaxHeight(1)
+		if item.IsMalicious {
+			style = style.Foreground(lipgloss.Color("9"))
 		}
-		sb.WriteString(lipgloss.NewStyle().MaxWidth(cl.Width).MaxHeight(1).Render(line) + "\n")
+		if i == cl.selected {
+			style = style.Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
+		}
+		sb.WriteString(style.Render(line) + "\n")
 	}
 	return sb.String()
 }

@@ -24,6 +24,7 @@ import (
 func main() {
 	processes := make(map[int32]*types.ProcItem)
 	ispCache := make(map[string]string)
+	threatBlocklist := network.LoadThreatBlocklist()
 
 	allProcs, _ := process.Processes()
 	for _, p := range allProcs {
@@ -108,6 +109,12 @@ func main() {
 					remoteIP = srcIP
 				}
 
+				isMalicious := false
+				if threatBlocklist[dstIP+":"+dstPort] || threatBlocklist[srcIP+":"+srcPort] {
+					isMalicious = true
+					processes[pid].IsMalicious = true
+				}
+
 					pkt := types.PacketData{
 						Timestamp: time.Now(),
 						SrcIP:     srcIP,
@@ -118,9 +125,27 @@ func main() {
 						Length:    len(packet.Data()),
 						ISP:       network.GetISP(remoteIP, ispCache),
 						Service:   network.IdentifyService(processes[pid].Name, srcPort, dstPort),
+						IsMalicious: isMalicious,
 					}
 					if appLayer := packet.ApplicationLayer(); appLayer != nil {
-						pkt.Payload = hex.Dump(appLayer.Payload())
+						payload := appLayer.Payload()
+						pkt.Payload = hex.Dump(payload)
+
+						payloadStr := string(payload)
+						if strings.HasPrefix(payloadStr, "HTTP/") {
+							lines := strings.Split(payloadStr, "\r\n")
+							if len(lines) > 0 {
+								parts := strings.Split(lines[0], " ")
+								if len(parts) >= 2 {
+									pkt.HTTPStatus = parts[1]
+								}
+							}
+						} else if strings.HasPrefix(payloadStr, "GET") || strings.HasPrefix(payloadStr, "POST") || strings.HasPrefix(payloadStr, "PUT") {
+							parts := strings.Split(payloadStr, " ")
+							if len(parts) >= 1 {
+								pkt.HTTPMethod = parts[0]
+							}
+						}
 					} else {
 						pkt.Payload = ""
 					}
@@ -128,6 +153,13 @@ func main() {
 						pkt.ProcessName = procItem.Name
 					}
 					processes[pid].Packets = append(processes[pid].Packets, pkt)
+				
+					if strings.HasPrefix(srcIP, "192.") || strings.HasPrefix(srcIP, "10.") || srcIP == "127.0.0.1" {
+						processes[pid].BytesOut += uint64(pkt.Length)
+					} else {
+						processes[pid].BytesIn += uint64(pkt.Length)
+					}
+
 					if len(processes[pid].Packets) > 1000 {
 						processes[pid].Packets = processes[pid].Packets[len(processes[pid].Packets)-1000:]
 					}

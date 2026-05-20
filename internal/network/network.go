@@ -35,6 +35,28 @@ func GetISP(ip string, cache map[string]string) string {
 	return r.Isp
 }
 
+func LoadThreatBlocklist() map[string]bool {
+	blocklist := make(map[string]bool)
+	resp, err := http.Get("https://threatfox.abuse.ch/export/json/recent/")
+	if err != nil {
+		return blocklist
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		QueryStatus string                   `json:"query_status"`
+		Data        []map[string]interface{} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err == nil {
+		for _, entry := range data.Data {
+			if ioc, ok := entry["ioc"].(string); ok && entry["ioc_type"] == "ip:port" {
+				blocklist[ioc] = true
+			}
+		}
+	}
+	return blocklist
+}
+
 func FindPidByPort(srcPort, dstPort string) int32 {
 	sp, _ := strconv.Atoi(srcPort)
 	dp, _ := strconv.Atoi(dstPort)

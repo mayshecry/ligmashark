@@ -18,12 +18,18 @@ type PacketData struct {
 	Payload   string
 	ProcessName string
 	AIAnalysis string
+	IsMalicious bool
+	HTTPStatus  string
+	HTTPMethod  string
 }
 
 type ProcItem struct {
 	PID     int32
 	Name    string
+	BytesIn  uint64
+	BytesOut uint64
 	Packets []PacketData
+	IsMalicious bool
 }
 
 func (i ProcItem) Title() string       { return fmt.Sprintf("%s (PID: %d)", i.Name, i.PID) }
@@ -37,4 +43,17 @@ type SystemInfo struct {
 	Memory    string
 	GoVersion string
 	Uptime    string
+}
+
+type HTTPInfo struct {
+	Timestamp   time.Time
+	SrcIP       string
+	DstIP       string
+	SrcPort     string
+	DstPort     string
+	Protocol    string
+	Length      int
+	URL         string
+	HTTPMethod  string
+	HTTPHeaders map[string]string
 }
