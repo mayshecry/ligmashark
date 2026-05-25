@@ -36,6 +36,11 @@ func (i ProcItem) Title() string       { return fmt.Sprintf("%s (PID: %d)", i.Na
 func (i ProcItem) Description() string { return fmt.Sprintf("Packets: %d", len(i.Packets)) }
 func (i ProcItem) FilterValue() string { return i.Name }
 
+type Plugin interface {
+	Name() string
+	OnPacket(pkt *PacketData)
+}
+
 type SystemInfo struct {
 	OS        string
 	Hostname  string
@@ -56,4 +61,9 @@ type HTTPInfo struct {
 	URL         string
 	HTTPMethod  string
 	HTTPHeaders map[string]string
+}
+
+type BandwidthPoint struct {
+	In  uint64
+	Out uint64
 }

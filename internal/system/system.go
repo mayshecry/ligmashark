@@ -15,6 +15,9 @@ import (
 )
 
 func getBasePlatform(fallback string) string {
+	if runtime.GOOS == "windows" {
+		return "Windows"
+	}
 	data, err := os.ReadFile("/etc/os-release")
 	if err != nil {
 		return fallback

@@ -57,6 +57,8 @@ yay -S ligmashark-git
 | `/`              | Filter by ISP                       |
 | `;`              | Search/Filter processes by name     |
 | `p`              | Pause/Resume capture                |
+| `i`              | Re-select network interface         |
+| `g`              | Toggle Graph Mode                   |
 | `s`              | Cycle filter mode                   |
 
 ## 🧠 AI Analysis

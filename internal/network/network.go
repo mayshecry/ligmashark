@@ -6,15 +6,76 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	netutil "github.com/shirou/gopsutil/v3/net"
 )
+
+var (
+	localIPs    []string
+	localIPsMu  sync.RWMutex
+	connCache   []netutil.ConnectionStat
+	connCacheMu sync.RWMutex
+)
+
+func init() {
+	updateLocalIPs()
+	updateConnCache()
+	go func() {
+		for {
+			time.Sleep(2 * time.Second)
+			updateLocalIPs()
+			updateConnCache()
+		}
+	}()
+}
+
+func updateLocalIPs() {
+	var ips []string
+	if interfaces, err := net.Interfaces(); err == nil {
+		for _, i := range interfaces {
+			addrs, _ := i.Addrs()
+			for _, addr := range addrs {
+				if ipnet, ok := addr.(*net.IPNet); ok {
+					ips = append(ips, ipnet.IP.String())
+				}
+			}
+		}
+	}
+	localIPsMu.Lock()
+	localIPs = ips
+	localIPsMu.Unlock()
+}
+
+func updateConnCache() {
+	conns, err := netutil.Connections("all")
+	if err == nil {
+		connCacheMu.Lock()
+		connCache = conns
+		connCacheMu.Unlock()
+	}
+}
+
+func IsLocalIP(ip string) bool {
+	if ip == "127.0.0.1" || ip == "::1" {
+		return true
+	}
+	localIPsMu.RLock()
+	defer localIPsMu.RUnlock()
+	for _, lip := range localIPs {
+		if lip == ip {
+			return true
+		}
+	}
+	return strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") || strings.HasPrefix(ip, "172.1") || strings.HasPrefix(ip, "172.2") || strings.HasPrefix(ip, "172.3")
+}
 
 func GetISP(ip string, cache map[string]string) string {
 	if val, ok := cache[ip]; ok {
 		return val
 	}
-	if strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") || strings.HasPrefix(ip, "127.") {
+	if IsLocalIP(ip) {
 		return "Local Network"
 	}
 
@@ -57,36 +118,21 @@ func LoadThreatBlocklist() map[string]bool {
 	return blocklist
 }
 
-func FindPidByPort(srcPort, dstPort string) int32 {
+func FindPidByPort(srcIP, srcPort, dstIP, dstPort string) int32 {
 	sp, _ := strconv.Atoi(srcPort)
 	dp, _ := strconv.Atoi(dstPort)
 
-	conns, err := netutil.Connections("all")
-	if err != nil {
-		return 0
-	}
+	connCacheMu.RLock()
+	defer connCacheMu.RUnlock()
 
-	for _, conn := range conns {
-		if conn.Laddr.Port == uint32(sp) || conn.Laddr.Port == uint32(dp) {
+	for _, conn := range connCache {
+		if (conn.Laddr.Port == uint32(sp) && (conn.Laddr.IP == srcIP || srcIP == "127.0.0.1" || srcIP == "0.0.0.0" || srcIP == "::")) ||
+			(conn.Laddr.Port == uint32(dp) && (conn.Laddr.IP == dstIP || dstIP == "127.0.0.1" || dstIP == "0.0.0.0" || dstIP == "::")) {
 			if conn.Pid != 0 {
 				return conn.Pid
 			}
 		}
 	}
-
-	if interfaces, err := net.Interfaces(); err == nil {
-		for _, i := range interfaces {
-			addrs, _ := i.Addrs()
-			for _, addr := range addrs {
-				if ipnet, ok := addr.(*net.IPNet); ok {
-					if ipnet.IP.String() == srcPort || ipnet.IP.String() == dstPort {
-						continue
-					}
-				}
-			}
-		}
-	}
-
 	return 0
 }
 

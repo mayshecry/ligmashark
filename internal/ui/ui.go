@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"runtime"
 	"github.com/shirou/gopsutil/v3/process"
 	"os/exec"
 
@@ -40,6 +41,7 @@ const (
 	PacketDetailMode
 	HelpMode
 	ProcessSearchMode
+	GraphMode
 )
 
 type Model struct {
@@ -65,6 +67,10 @@ type Model struct {
 	HelpViewport CustomViewport
 	OllamaStatus string
 	CursorVisible bool
+	History      []types.BandwidthPoint
+	LastTotalIn  uint64
+	LastTotalOut uint64
+	GraphScrollOffset int
 }
 
 func NewModel(processes map[int32]*types.ProcItem, mu *sync.RWMutex, sysInfo types.SystemInfo) Model {
@@ -114,6 +120,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc", "q", "?":
 				m.Mode = NormalMode
 			}
+		} else if m.Mode == GraphMode {
+			switch msg.String() {
+			case "esc", "q", "g", "h":
+				m.Mode = NormalMode
+				m.GraphScrollOffset = 0
+			case "left":
+				m.GraphScrollOffset++
+				maxOffset := len(m.History) - (m.Width - 20)
+				if maxOffset < 0 {
+					maxOffset = 0
+				}
+				if m.GraphScrollOffset > maxOffset {
+					m.GraphScrollOffset = maxOffset
+				}
+			case "right":
+				m.GraphScrollOffset--
+				if m.GraphScrollOffset < 0 {
+					m.GraphScrollOffset = 0
+				}
+			}
+			return m, nil
 		} else if m.Mode == PacketDetailMode {
 			switch msg.String() {
 			case "esc", "q", "backspace":
@@ -176,6 +203,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.toggleCaptureCmd()
 			case "s":
 				m.cycleProcessFilter()
+				return m, nil
+			case "g":
+				m.Mode = GraphMode
 				return m, nil
 
 			case "h", "home", "q":
@@ -324,6 +354,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UpdateMsg:
 		m.CursorVisible = !m.CursorVisible
 		m.refreshList()
+		m.updateHistory()
 		return m, tea.Tick(time.Second, func(t time.Time) tea.Msg {
 			return UpdateMsg{}
 		})
@@ -426,6 +457,34 @@ func (m *Model) refreshList() {
 	m.updateViewport()
 }
 
+func (m *Model) updateHistory() {
+	m.Mu.RLock()
+	var currentIn, currentOut uint64
+	for _, p := range m.Processes {
+		currentIn += p.BytesIn
+		currentOut += p.BytesOut
+	}
+	m.Mu.RUnlock()
+
+	deltaIn := uint64(0)
+	deltaOut := uint64(0)
+
+	if m.LastTotalIn > 0 && currentIn >= m.LastTotalIn {
+		deltaIn = currentIn - m.LastTotalIn
+	}
+	if m.LastTotalOut > 0 && currentOut >= m.LastTotalOut {
+		deltaOut = currentOut - m.LastTotalOut
+	}
+
+	m.LastTotalIn = currentIn
+	m.LastTotalOut = currentOut
+
+	m.History = append(m.History, types.BandwidthPoint{In: deltaIn, Out: deltaOut})
+	if len(m.History) > 100 {
+		m.History = m.History[1:]
+	}
+}
+
 func (m *Model) updateViewport() {
 	m.Mu.RLock()
 	defer m.Mu.RUnlock()
@@ -487,6 +546,9 @@ func (m Model) View() string {
 	if m.Mode == HelpMode {
 		m.HelpViewport.SetContent(m.renderHelpMenuContent())
 		return m.HelpViewport.View()
+	}
+	if m.Mode == GraphMode {
+		return m.renderGraphMode()
 	}
 
 	listRender := m.List.View()
@@ -637,15 +699,95 @@ func (m Model) shouldShowProcess(p *types.ProcItem) bool {
 	return false
 }
 
+func (m Model) renderGraphMode() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).Render("Network Traffic (Bytes/sec)")
+	
+	var maxIn, maxOut uint64
+	for _, p := range m.History {
+		if p.In > maxIn { maxIn = p.In }
+		if p.Out > maxOut { maxOut = p.Out }
+	}
+
+	graphHeight := (m.Height - 14) / 2
+	if graphHeight < 3 { graphHeight = 3 }
+
+	renderChart := func(label string, color string, maxValue uint64, getVal func(types.BandwidthPoint) uint64) string {
+		var sb strings.Builder
+		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render(label) + "\n")
+		
+		chartWidth := m.Width - 20
+		if chartWidth < 10 { chartWidth = 10 }
+		
+		endIdx := len(m.History) - m.GraphScrollOffset
+		startIdx := endIdx - chartWidth
+		if startIdx < 0 { startIdx = 0 }
+		if endIdx < 0 { endIdx = 0 }
+		if endIdx > len(m.History) { endIdx = len(m.History) }
+
+		historyToDraw := []types.BandwidthPoint{}
+		if endIdx > startIdx {
+			historyToDraw = m.History[startIdx:endIdx]
+		}
+
+		for h := graphHeight; h > 0; h-- {
+			threshold := uint64(float64(maxValue) * float64(h) / float64(graphHeight))
+			if h == graphHeight {
+				sb.WriteString(fmt.Sprintf("%8s ┐", formatBytes(maxValue)))
+			} else {
+				sb.WriteString(fmt.Sprintf("%8s │", formatBytes(threshold)))
+			}
+			
+			for _, p := range historyToDraw {
+				val := getVal(p)
+				if maxValue > 0 && val >= threshold && val > 0 {
+					sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render("┃"))
+				} else {
+					sb.WriteString(" ")
+				}
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("         └" + strings.Repeat("─", len(historyToDraw)) + "\n")
+		return sb.String()
+	}
+
+	inChart := renderChart("Incoming Traffic", "10", maxIn, func(p types.BandwidthPoint) uint64 { return p.In })
+	outChart := renderChart("Outgoing Traffic", "12", maxOut, func(p types.BandwidthPoint) uint64 { return p.Out })
+
+	scrollInfo := ""
+	if m.GraphScrollOffset > 0 {
+		scrollInfo = fmt.Sprintf(" [Scrolling: %d points back]", m.GraphScrollOffset)
+	}
+
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\nArrows (Left/Right): Scroll History • Press 'g' or 'Esc' to return." + scrollInfo)
+	
+	return landingPageStyle.Width(m.Width - 4).Height(m.Height - 2).Render(
+		lipgloss.JoinVertical(lipgloss.Center, title, "\n", inChart, "\n", outChart, help),
+	)
+}
+
+func formatBytes(b uint64) string {
+	const unit = 1024
+	if b < unit { return fmt.Sprintf("%d B", b) }
+	div, exp := uint64(unit), 0
+	for n := b / unit; n >= unit; n /= unit { div *= unit; exp++ }
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
 func (m Model) renderLandingPage() string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).SetString("Ligmashark")
 	author := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("Created by val (@mayshecry) on GitHub")
 
+	platformWarn := ""
+	if runtime.GOOS == "windows" {
+		platformWarn = "\n\n⚠️  Note: You are on Windows. For the full experience (including plugin support and native elevation), Linux is highly recommended."
+	}
+
 	explanation := explStyle.Render(
-			"Ligmashark is a powerful, terminal-based network analyzer for Linux."  +
+			"Ligmashark is a powerful, terminal-based network analyzer."  +
 			"It maps real-time network traffic to local processes (PIDs), " +
 			"identifies destination ISPs, and provides a Neovim-inspired TUI " +
-			"for deep packet inspection and payload analysis.")
+			"for deep packet inspection and payload analysis." + platformWarn)
 
 	specs := lipgloss.NewStyle().Padding(1, 2).SetString(fmt.Sprintf(`
 OS: %s
@@ -695,6 +837,7 @@ Traffic View:
   /                : Filter processes by ISP
   p                : Pause/Resume packet capture
   ;                : Search/Filter process by name
+  g                : Toggle Graph Mode
 `
 	return lipgloss.JoinVertical(lipgloss.Left, title, style.Render(helpText), "\nPress 'Esc' or 'q' to return.")
 }

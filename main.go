@@ -4,9 +4,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,6 +16,7 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 
 	"ligmashark/internal/network"
+	"ligmashark/internal/plugins"
 	"ligmashark/internal/system"
 	"ligmashark/internal/types"
 	"ligmashark/internal/ui"
@@ -25,6 +26,11 @@ func main() {
 	processes := make(map[int32]*types.ProcItem)
 	ispCache := make(map[string]string)
 	threatBlocklist := network.LoadThreatBlocklist()
+
+	loadedPlugins, err := plugins.LoadPlugins("./plugins")
+	if err != nil {
+		fmt.Printf("Warning: Failed to load plugins: %v\n", err)
+	}
 
 	allProcs, _ := process.Processes()
 	for _, p := range allProcs {
@@ -36,22 +42,24 @@ func main() {
 
 	m := ui.NewModel(processes, &mu, system.GetSystemInfo())
 
-	handle, err := pcap.OpenLive("any", 1600, true, pcap.BlockForever)
-	if err != nil {
-		if os.Geteuid() != 0 && (strings.Contains(strings.ToLower(err.Error()), "permission") || strings.Contains(err.Error(), "permitted")) {
-			executable, execErr := os.Executable()
-			if execErr != nil {
-				fmt.Fprintf(os.Stderr, "Permission denied. Failed to find executable for elevation: %v\n", execErr)
-				os.Exit(1)
-			}
+	captureDevice := "any"
+	if runtime.GOOS == "windows" {
+		devices, err := pcap.FindAllDevs()
+		if err == nil && len(devices) > 0 {
+			captureDevice = devices[0].Name
+		}
+	}
 
-			fmt.Println("Insufficient permissions for packet capture. Elevating with sudo...")
-			sudoArgs := append([]string{"sudo", executable}, os.Args[1:]...)
-			err = syscall.Exec("/usr/bin/sudo", sudoArgs, os.Environ())
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to escalate to sudo: %v\n", err)
-				os.Exit(1)
+	handle, err := pcap.OpenLive(captureDevice, 1600, true, pcap.BlockForever)
+	if err != nil {
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "permission") || strings.Contains(errStr, "permitted") {
+			if runtime.GOOS == "windows" {
+				fmt.Println("Permission denied. Please run Ligmashark as Administrator (elevated terminal).")
+			} else {
+				fmt.Println("Permission denied. Please run with sudo or set CAP_NET_RAW capabilities.")
 			}
+			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -73,6 +81,10 @@ func main() {
 				ip, _ := ipLayer.(*layers.IPv4)
 				srcIP = ip.SrcIP.String()
 				dstIP = ip.DstIP.String()
+			} else if ipLayer := packet.Layer(layers.LayerTypeIPv6); ipLayer != nil {
+				ip, _ := ipLayer.(*layers.IPv6)
+				srcIP = ip.SrcIP.String()
+				dstIP = ip.DstIP.String()
 			}
 
 			if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
@@ -90,7 +102,7 @@ func main() {
 			}
 
 			if protocol != "" {
-				pid := network.FindPidByPort(srcPort, dstPort)
+				pid := network.FindPidByPort(srcIP, srcPort, dstIP, dstPort)
 				mu.Lock()
 				if _, ok := processes[pid]; !ok {
 					name := "System/Unknown"
@@ -152,6 +164,11 @@ func main() {
 					if procItem, exists := processes[pid]; exists {
 						pkt.ProcessName = procItem.Name
 					}
+
+					for _, p := range loadedPlugins {
+						p.OnPacket(&pkt)
+					}
+
 					processes[pid].Packets = append(processes[pid].Packets, pkt)
 				
 					if strings.HasPrefix(srcIP, "192.") || strings.HasPrefix(srcIP, "10.") || srcIP == "127.0.0.1" {
