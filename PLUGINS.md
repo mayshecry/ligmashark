@@ -1,6 +1,6 @@
 # 🔌 Ligmashark Plugin System
 
-Ligmashark supports dynamic plugins using Go's `plugin` package. This allows you to extend Ligmashark's functionality (e.g., custom logging, alerting, or data export) without modifying the core source code.
+Ligmashark supports dynamic plugins using Go's `plugin` package. This allows you to extend functionality (e.g., custom logging, alerting, or data export) without modifying the core source code.
 
 ## 🛠️ How to create a plugin
 
