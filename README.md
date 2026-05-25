@@ -1,10 +1,8 @@
-
 # 🦈 Ligmashark
 
 **Real-time network analyzer that actually shows you which process is talking to who.**
 
-Most network tools just vomit raw packets at you.  
-**Ligmashark** maps every connection directly to the **PID + Application**, tells you the ISP, and even uses local AI (Ollama) to explain what the f*ck is in the packet.
+Most network tools just vomit raw packets at you. **Ligmashark** maps every connection directly to the **PID + Application**, identifies the ISP, and uses local AI (Ollama) to explain exactly what is happening inside the packet.
 
 Built for Arch/Chad Linux users, self-hosters, security autists, and people who like knowing what their machine is actually doing.
 
@@ -13,19 +11,44 @@ Built for Arch/Chad Linux users, self-hosters, security autists, and people who 
 ![Packet Detail + AI Analysis](https://github.com/mayshecry/ligmashark/blob/main/screenshots/3.png)
 ![Help Menu](https://github.com/mayshecry/ligmashark/blob/main/screenshots/4.png)
 
+---
+
+## 📑 Index
+
+1. [Features](#-features)
+2. [Getting Started](#-getting-started)
+   - [Requirements](#requirements)
+   - [Installation](#installation)
+3. [Usage & Hotkeys](#-usage--hotkeys)
+4. [Advanced Features](#-advanced-features)
+   - [AI Analysis](#ai-analysis)
+   - [Graph Mode](#graph-mode)
+   - [Plugin System](#plugin-system)
+5. [Platform Support](#-platform-support)
+6. [How It Works & Transparency](#-how-it-works--transparency)
+
 ## ✨ Features
 
 - **Real-time ISP & Service Detection** — Identifies Discord, Minecraft, GitHub, browsers, etc.
 - **Threat Intelligence Integration** — Real-time matching against **ThreatFox** IOCs; highlights malicious connections in red.
-- **HTTP Protocol Awareness** — Shallow sniffing of unencrypted traffic to extract HTTP Methods (GET, POST) and Status Codes (200, 404, etc.).
+- **Dynamic Protocol Awareness** — Shallow sniffing of unencrypted traffic to extract HTTP Methods, Status Codes, and service hints.
 - **Local AI Packet Analysis** — Uses Ollama (qwen2.5) to explain payloads in plain English
 - **Clean Neovim-style TUI** — Beautiful, fast, and keyboard-driven
-- **Smart Filters** — Everything / Foreground apps only / Background services only
-- **Bandwidth Tracking** — Real-time throughput monitoring (Bytes In/Out) per process.
+- **Graph Mode** — Visual real-time bandwidth tracking for system-wide traffic.
+- **Extensible Plugin Support** — Create custom logic in Go to process packets on the fly.
 - **Lightweight & Fast** — Written in Go with Bubble Tea + Lip Gloss
 
-## 🚀 Installation
+## 🚀 Getting Started
 
+### Requirements
+Ligmashark needs a few dependencies to capture and analyze traffic:
+- **Linux** (Best experience) or **Windows**.
+- **libpcap** headers (e.g., `libpcap-dev` on Debian or `libpcap` on Arch).
+- **Go 1.22+** (to build from source).
+- **Ollama** (Optional, for AI payload explanations).
+
+### Installation
+**Linux (Recommended):**
 ```bash
 git clone https://github.com/mayshecry/ligmashark.git
 cd ligmashark

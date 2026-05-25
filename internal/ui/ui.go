@@ -708,8 +708,8 @@ func (m Model) renderGraphMode() string {
 		if p.Out > maxOut { maxOut = p.Out }
 	}
 
-	graphHeight := (m.Height - 14) / 2
-	if graphHeight < 3 { graphHeight = 3 }
+	graphHeight := (m.Height - 16) / 2
+	if graphHeight < 2 { graphHeight = 2 }
 
 	renderChart := func(label string, color string, maxValue uint64, getVal func(types.BandwidthPoint) uint64) string {
 		var sb strings.Builder
@@ -754,6 +754,33 @@ func (m Model) renderGraphMode() string {
 	inChart := renderChart("Incoming Traffic", "10", maxIn, func(p types.BandwidthPoint) uint64 { return p.In })
 	outChart := renderChart("Outgoing Traffic", "12", maxOut, func(p types.BandwidthPoint) uint64 { return p.Out })
 
+	// Calculate Top Talkers
+	m.Mu.RLock()
+	type procStats struct {
+		name  string
+		pid   int32
+		total uint64
+	}
+	var stats []procStats
+	for _, p := range m.Processes {
+		if p.BytesIn+p.BytesOut > 0 {
+			stats = append(stats, procStats{p.Name, p.PID, p.BytesIn + p.BytesOut})
+		}
+	}
+	m.Mu.RUnlock()
+	sort.Slice(stats, func(i, j int) bool { return stats[i].total > stats[j].total })
+
+	var topTalkersStr string
+	if len(stats) > 0 {
+		limit := 3
+		if len(stats) < limit { limit = len(stats) }
+		var lines []string
+		for i := 0; i < limit; i++ {
+			lines = append(lines, fmt.Sprintf("%s (%d): %s", stats[i].name, stats[i].pid, formatBytes(stats[i].total)))
+		}
+		topTalkersStr = "\n" + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")).Render("Top Talkers (Session): ") + strings.Join(lines, "  │  ")
+	}
+
 	scrollInfo := ""
 	if m.GraphScrollOffset > 0 {
 		scrollInfo = fmt.Sprintf(" [Scrolling: %d points back]", m.GraphScrollOffset)
@@ -762,7 +789,7 @@ func (m Model) renderGraphMode() string {
 	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\nArrows (Left/Right): Scroll History • Press 'g' or 'Esc' to return." + scrollInfo)
 	
 	return landingPageStyle.Width(m.Width - 4).Height(m.Height - 2).Render(
-		lipgloss.JoinVertical(lipgloss.Center, title, "\n", inChart, "\n", outChart, help),
+		lipgloss.JoinVertical(lipgloss.Center, title, "\n", inChart, "\n", outChart, topTalkersStr, help),
 	)
 }
 
