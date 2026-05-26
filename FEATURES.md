@@ -3,6 +3,7 @@
 ### 🛰️ Real-time Detection
 - **ISP Detection**: Automatically identifies the destination network (e.g., Google, Amazon, Comcast, Discord).
 - **Service Mapping**: Recognizes common gaming ports (Minecraft, Source Engine, Rust) and web browsers.
+- **Protocol Filtering**: Cycle through TCP, UDP, and ICMP filters instantly to isolate specific traffic types.
 
 ### 🛡️ Threat Intelligence
 - **ThreatFox Integration**: Periodically fetches real-time IoCs (Indicators of Compromise) from `abuse.ch`.
@@ -13,6 +14,12 @@ Ligmashark uses local AI to explain packet payloads in plain English.
 - **Model**: Uses `qwen2.5:0.5b` via Ollama.
 - **Privacy**: No data leaves your machine. The raw hex dump is sent to your local Ollama instance for summary.
 - **Context Awareness**: The AI is tipped off about process names (e.g., Discord) to provide better context for UDP traffic.
+- **Exportable Reports**: Generate detailed technical reports for any packet, including AI summaries, network metadata, and full hex dumps for offline analysis.
+
+### ⌨️ Navigation & Control
+- **Auto-scroll Management**: Toggle auto-scroll to freeze the viewport, allowing you to inspect specific sequences while capture continues in the background.
+- **Session Management**: Clear packet history and reset bandwidth counters for individual processes to start fresh analysis sessions.
+- **Enhanced Navigation**: Optimized for speed with support for Home, End, and Vim-style keys (`G`) for navigating large packet buffers and process lists.
 
 ### 📊 Graph Mode
 Accessed by pressing `g`, this mode provides high-level visualization of your network stack.
