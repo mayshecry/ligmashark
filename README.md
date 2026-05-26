@@ -16,11 +16,11 @@ Built for Arch/Chad Linux users, self-hosters, security autists, and people who 
 ## 📑 Index
 
 1. [🚀 Getting Started](#-getting-started)
-2. [✨ Core Features](FEATURES.md)
-3. [⌨️ Usage & Hotkeys](USAGE.md)
-4. [🔌 Plugin Development](PLUGINS.md)
-5. [🛡️ Internals & Privacy](INTERNALS.md)
-6. [🖥️ Platform Support](FEATURES.md#platform-support)
+2. [✨ Core Features](docs/FEATURES.md)
+3. [⌨️ Usage & Hotkeys](docs/USAGE.md)
+4. [🔌 Plugin Development](docs/PLUGINS.md)
+5. [🛡️ Internals & Privacy](docs/INTERNALS.md)
+6. [🖥️ Platform Support](docs/FEATURES.md#platform-support)
 
 ## 🚀 Getting Started
 
