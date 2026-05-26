@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ type AIResultMsg string
 type OllamaStatusMsg string
 type PauseCaptureMsg struct{}
 type ResumeCaptureMsg struct{}
+type ExportResultMsg string
 
 type Mode int
 
@@ -67,6 +69,7 @@ type Model struct {
 	PacketDetailViewport CustomViewport
 	HelpViewport CustomViewport
 	OllamaStatus string
+	ExportStatus string
 	CursorVisible bool
 	History      []types.BandwidthPoint
 	LastTotalIn  uint64
@@ -149,6 +152,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc", "q", "backspace":
 				m.Mode = NormalMode
+				m.ExportStatus = ""
+			case "e":
+				m.ExportStatus = "Exporting..."
+				m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
+				return m, m.exportPacketCmd(m.InspectedPacket)
 			default:
 				m.PacketDetailViewport.Update(msg)
 			}
@@ -381,6 +389,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case OllamaStatusMsg:
 		m.OllamaStatus = string(msg)
 		return m, nil
+	case ExportResultMsg:
+		m.ExportStatus = string(msg)
+		m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
+		return m, nil
 	case UpdateMsg:
 		m.CursorVisible = !m.CursorVisible
 		m.refreshList()
@@ -399,6 +411,51 @@ func (m *Model) analyzePacketCmd(pkt types.PacketData) tea.Cmd {
 			return AIResultMsg("AI Analysis failed: " + err.Error())
 		}
 		return AIResultMsg(analysis)
+	}
+}
+
+func (m *Model) exportPacketCmd(pkt types.PacketData) tea.Cmd {
+	return func() tea.Msg {
+		filename := fmt.Sprintf("packet_report_%s.txt", pkt.Timestamp.Format("20060102_150405"))
+		
+		var sb strings.Builder
+		sb.WriteString("🦈 LIGMASHARK PACKET REPORT\n")
+		sb.WriteString("===========================\n\n")
+		sb.WriteString(fmt.Sprintf("Timestamp:   %s\n", pkt.Timestamp.Format("2006-01-02 15:04:05.000")))
+		sb.WriteString(fmt.Sprintf("Protocol:    %s\n", pkt.Protocol))
+		sb.WriteString(fmt.Sprintf("Process:     %s\n", pkt.ProcessName))
+		sb.WriteString(fmt.Sprintf("Service:     %s\n", pkt.Service))
+		sb.WriteString(fmt.Sprintf("Length:      %d bytes\n", pkt.Length))
+		
+		malicious := "No"
+		if pkt.IsMalicious {
+			malicious = "Yes (Threat Intel Match)"
+		}
+		sb.WriteString(fmt.Sprintf("Malicious:   %s\n\n", malicious))
+		
+		sb.WriteString("NETWORK CONTEXT\n")
+		sb.WriteString("---------------\n")
+		sb.WriteString(fmt.Sprintf("Source:      %s:%s\n", pkt.SrcIP, pkt.SrcPort))
+		sb.WriteString(fmt.Sprintf("Destination: %s:%s\n", pkt.DstIP, pkt.DstPort))
+		sb.WriteString(fmt.Sprintf("ISP/Location: %s\n\n", pkt.ISP))
+		
+		sb.WriteString("AI ANALYSIS\n")
+		sb.WriteString("-----------\n")
+		if pkt.AIAnalysis != "" {
+			sb.WriteString(pkt.AIAnalysis + "\n\n")
+		} else {
+			sb.WriteString("Analysis not completed at time of export.\n\n")
+		}
+		
+		sb.WriteString("RAW PAYLOAD\n")
+		sb.WriteString("-----------\n")
+		sb.WriteString(pkt.Payload + "\n")
+
+		err := os.WriteFile(filename, []byte(sb.String()), 0644)
+		if err != nil {
+			return ExportResultMsg("Export failed: " + err.Error())
+		}
+		return ExportResultMsg("Success! Report saved to: " + filename)
 	}
 }
 
@@ -685,8 +742,14 @@ func (m Model) getPacketDetailContent() string {
 		aiText,
 		m.InspectedPacket.Payload,
 	)
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\nPress 'Esc' or 'q' to return")
-	content := lipgloss.JoinVertical(lipgloss.Left, title, style.Render(details), help)
+
+	exportStatus := ""
+	if m.ExportStatus != "" {
+		exportStatus = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render("\n" + m.ExportStatus)
+	}
+
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[E] Export Report • [Esc/q] Back")
+	content := lipgloss.JoinVertical(lipgloss.Left, title, style.Render(details), exportStatus, help)
 	return content
 }
 
@@ -903,6 +966,7 @@ Traffic View:
   a                : Toggle Auto-scroll
   f                : Cycle Protocol Filter (TCP/UDP/ICMP)
   c                : Clear history for selected process
+  e                : Export Packet Report (in Detail view)
   ;                : Search/Filter process by name
   g                : Toggle Graph Mode
 `
