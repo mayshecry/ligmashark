@@ -56,6 +56,7 @@ type Model struct {
 	Width       int
 	Height      int
 	Mode        Mode
+	ActiveProtocolFilter string
 	FilterInput string
 	ActiveFilter string
 	ProcessSearchInput string
@@ -70,6 +71,7 @@ type Model struct {
 	History      []types.BandwidthPoint
 	LastTotalIn  uint64
 	LastTotalOut uint64
+	AutoScroll   bool
 	GraphScrollOffset int
 }
 
@@ -86,7 +88,9 @@ func NewModel(processes map[int32]*types.ProcItem, mu *sync.RWMutex, sysInfo typ
 		ProcessFilterSetting: FilterEverything,
 		CaptureStatus: "Running",
 		OllamaStatus: "Initializing Ollama...",
+		ActiveProtocolFilter: "ALL",
 		Mode:      LandingPageMode,
+		AutoScroll: true,
 	}
 }
 
@@ -207,6 +211,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "g":
 				m.Mode = GraphMode
 				return m, nil
+			case "f":
+				switch m.ActiveProtocolFilter {
+				case "ALL": m.ActiveProtocolFilter = "TCP"
+				case "TCP": m.ActiveProtocolFilter = "UDP"
+				case "UDP": m.ActiveProtocolFilter = "ICMP"
+				default:    m.ActiveProtocolFilter = "ALL"
+				}
+				m.updateViewport()
+			case "a":
+				m.AutoScroll = !m.AutoScroll
+			case "c":
+				m.Mu.Lock()
+				if p, ok := m.Processes[m.SelectedPid]; ok {
+					p.Packets = nil
+					p.BytesIn = 0
+					p.BytesOut = 0
+				}
+				m.Mu.Unlock()
+				m.updateViewport()
 
 			case "h", "home", "q":
 				m.Mode = LandingPageMode
@@ -224,13 +247,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.SelectedPid = i.PID
 					m.updateViewport()
 				}
-			case "up", "down", "j", "k":
+			case "up", "down", "j", "k", "home", "end", "G":
 				m.List.Update(msg)
 				if i := m.List.SelectedItem(); i != nil {
 					m.SelectedPid = i.PID
 					m.updateViewport()
 				}
-			case "pgup", "pgdown", "u", "d":
+			case "pgup", "pgdown", "u", "d", "home", "end", "G":
 				m.Viewport.Update(msg)
 			}
 		}
@@ -497,14 +520,12 @@ func (m *Model) updateViewport() {
 		buf.WriteString(strings.Repeat("-", m.Viewport.Width) + "\n")
 
 		filteredPackets := make([]types.PacketData, 0)
-		if m.ActiveFilter != "" {
-			for _, pkt := range p.Packets {
-				if strings.Contains(strings.ToLower(pkt.ISP), strings.ToLower(m.ActiveFilter)) {
-					filteredPackets = append(filteredPackets, pkt)
-				}
+		for _, pkt := range p.Packets {
+			ispMatch := m.ActiveFilter == "" || strings.Contains(strings.ToLower(pkt.ISP), strings.ToLower(m.ActiveFilter))
+			protoMatch := m.ActiveProtocolFilter == "ALL" || pkt.Protocol == m.ActiveProtocolFilter
+			if ispMatch && protoMatch {
+				filteredPackets = append(filteredPackets, pkt)
 			}
-		} else {
-			filteredPackets = p.Packets
 		}
 
 		displayCount := 50
@@ -532,7 +553,9 @@ func (m *Model) updateViewport() {
 			buf.WriteString(style.Render(line) + "\n")
 		}
 		m.Viewport.SetContent(buf.String())
-		m.Viewport.ScrollToEnd()
+		if m.AutoScroll {
+			m.Viewport.ScrollToEnd()
+		}
 	}
 }
 
@@ -575,7 +598,12 @@ func (m Model) View() string {
 		)
 	}
 
-	captureBar := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(" [P] " + m.CaptureStatus + " ")
+	autoScrollStatus := "ON"
+	if !m.AutoScroll {
+		autoScrollStatus = "OFF"
+	}
+
+	captureBar := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(" [P] " + m.CaptureStatus + " [A] Auto-scroll: " + autoScrollStatus + " ")
 	activeFilterBar := ""
 	if m.ActiveFilter != "" {
 		activeFilterBar = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" Active Filter: ") +
@@ -588,8 +616,9 @@ func (m Model) View() string {
 	}
 
 	processFilterBar := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(fmt.Sprintf(" [S] Filter: %s ", m.ProcessFilterSetting.String()))
+	protoFilterBar := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(fmt.Sprintf(" [F] Proto: %s ", m.ActiveProtocolFilter))
 
-	footer := lipgloss.JoinHorizontal(lipgloss.Left, captureBar, processFilterBar, activeFilterBar, activeProcessSearchBar)
+	footer := lipgloss.JoinHorizontal(lipgloss.Left, captureBar, processFilterBar, protoFilterBar, activeFilterBar, activeProcessSearchBar)
 	if bottomBar != "" {
 		footer = lipgloss.JoinVertical(lipgloss.Left, bottomBar, footer)
 	}
@@ -852,17 +881,21 @@ Global:
   ?                : Toggle this Help Menu
 
 Navigation (Process List & Viewport):
-  j / Down Arrow   : Move down
-  k / Up Arrow     : Move up
+  j / k            : Move down / up list
+  Home / End / G   : Jump to Top / Bottom
   Enter            : Select process / Open packet detail
   u / PgUp         : Scroll viewport up
   d / PgDown       : Scroll viewport down
+  Home / End / G   : Viewport top / bottom
   Mouse Wheel      : Scroll viewport
   Left Click       : Select process / Open packet detail / Exit detail/help
 
 Traffic View:
   /                : Filter processes by ISP
   p                : Pause/Resume packet capture
+  a                : Toggle Auto-scroll
+  f                : Cycle Protocol Filter (TCP/UDP/ICMP)
+  c                : Clear history for selected process
   ;                : Search/Filter process by name
   g                : Toggle Graph Mode
 `
@@ -915,11 +948,13 @@ func (cl *CustomList) Update(msg tea.Msg) {
 			if cl.selected < 0 {
 				cl.selected = 0
 			}
-		case "down", "j":
+		case "down", "j", "end", "G":
 			cl.selected++
 			if cl.selected >= len(cl.items) {
 				cl.selected = len(cl.items) - 1
 			}
+		case "home":
+			cl.selected = 0
 		}
 	}
 }
@@ -1015,12 +1050,12 @@ func (cv *CustomViewport) Update(msg tea.Msg) {
 				cv.selected = cv.scrollOffset
 			}
 
-		case "up", "k":
+		case "up", "k", "home":
 			cv.scrollOffset--
 			if cv.scrollOffset < 0 {
 				cv.scrollOffset = 0
 			}
-		case "down", "j":
+		case "down", "j", "end", "G":
 			cv.scrollOffset++
 			if cv.scrollOffset > maxScroll {
 				cv.scrollOffset = maxScroll
