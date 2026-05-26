@@ -231,7 +231,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Mu.Unlock()
 				m.updateViewport()
 
-			case "h", "home", "q":
+			case "h", "q":
 				m.Mode = LandingPageMode
 				return m, nil
 			case "/":
@@ -247,14 +247,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.SelectedPid = i.PID
 					m.updateViewport()
 				}
-			case "up", "down", "j", "k", "home", "end", "G":
+			case "up", "down", "j", "k":
 				m.List.Update(msg)
 				if i := m.List.SelectedItem(); i != nil {
 					m.SelectedPid = i.PID
 					m.updateViewport()
 				}
-			case "pgup", "pgdown", "u", "d", "home", "end", "G":
+			case "pgup", "pgdown", "u", "d":
 				m.Viewport.Update(msg)
+			case "home", "end", "G":
+				m.List.Update(msg)
+				m.Viewport.Update(msg)
+				if i := m.List.SelectedItem(); i != nil {
+					m.SelectedPid = i.PID
+					m.updateViewport()
+				}
 			}
 		}
 
