@@ -53,6 +53,7 @@ const (
 	GlobalTrafficMode
 	CategorySelectionMode
 	SettingsMode
+	NetworkTopologyMode
 )
 
 type Model struct {
@@ -427,6 +428,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.GlobalViewport.Update(msg)
 			}
 			return m, nil
+		} else if m.Mode == NetworkTopologyMode {
+			switch msg.String() {
+			case "esc", "q", "n":
+				m.Mode = NormalMode
+			}
+			return m, nil
 		} else if m.Mode == FilterMode {
 			switch msg.String() {
 			case "enter":
@@ -530,6 +537,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "t":
 				m.Mode = GlobalTrafficMode
 				m.updateGlobalViewport()
+				return m, nil
+			case "n":
+				m.Mode = NetworkTopologyMode
 				return m, nil
 			case "h", "q":
 				m.Mode = CategorySelectionMode
@@ -733,17 +743,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			if msg.Type == tea.MouseLeft {
-				if msg.X >= m.Width-15 && msg.Y >= m.Height-2 {
+			if msg.Type == tea.MouseLeft && msg.Y >= m.Height-1 {
+				if msg.X >= m.Width-15 {
 					m.Mode = SettingsMode
 					return m, nil
 				}
-			}
 
-			if msg.Type == tea.MouseLeft {
-				if msg.Y >= m.Height-1 {
+				if msg.X < 12 {
 					return m, m.toggleCaptureCmd()
 				}
+				if msg.X >= 13 && msg.X < 33 {
+					m.AutoScroll = !m.AutoScroll
+					return m, nil
+				}
+				if msg.X >= 34 && msg.X < 44 {
+					m.Mode = GraphMode
+					return m, nil
+				}
+				if msg.X >= 45 && msg.X < 53 {
+					m.Mode = NetworkTopologyMode
+					return m, nil
+				}
+
+				return m, m.toggleCaptureCmd()
 			} else if msg.Type == tea.MouseWheelUp {
 				if msg.X < m.List.Width+2 {
 					m.List.Update(tea.KeyMsg{Type: tea.KeyUp})
@@ -1299,6 +1321,7 @@ Traffic View:
   e                : Export Packet Report (in Detail view)
   ;                : Search/Filter process by name
   g                : Toggle Graph Mode
+  n                : Toggle Network Topology Map
 `
 	return lipgloss.JoinVertical(lipgloss.Left, title, style.Render(helpText), "\nPress 'Esc' or 'q' to return.")
 }
@@ -1321,6 +1344,8 @@ func (m *Model) View() string {
 		return m.renderSettingsMode()
 	} else if m.Mode == GlobalTrafficMode {
 		return m.renderGlobalTrafficMode()
+	} else if m.Mode == NetworkTopologyMode {
+		return m.renderNetworkTopology()
 	}
 
 	m.List.PrimaryColor = m.getTheme().Primary
@@ -1336,6 +1361,7 @@ func (m *Model) View() string {
 		bottomBar = lipgloss.JoinHorizontal(lipgloss.Left,
 			lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Render("Filter ISP: "),
 			filterInputStyle.Render(m.FilterInput+cursor),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" [Enter] Apply [Esc] Cancel"),
 		)
 	} else if m.Mode == ProcessSearchMode {
 		cursor := " "
@@ -1345,6 +1371,7 @@ func (m *Model) View() string {
 		bottomBar = lipgloss.JoinHorizontal(lipgloss.Left,
 			lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Render("Search Process: "),
 			filterInputStyle.Render(m.ProcessSearchInput+cursor),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" [Enter] Apply [Esc] Cancel"),
 		)
 	}
 
@@ -1353,30 +1380,35 @@ func (m *Model) View() string {
 		autoScrollStatus = "OFF"
 	}
 
-	captureBar := lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render(" [P] " + m.CaptureStatus + " [A] Auto-scroll: " + autoScrollStatus + " ")
+	btnStyle := lipgloss.NewStyle().Background(lipgloss.Color("236")).Padding(0, 1).MarginRight(1)
+	captureBar := btnStyle.Copy().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render("[P] " + m.CaptureStatus)
+	scrollBar := btnStyle.Copy().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render("[A] Scroll Lock: " + autoScrollStatus)
+	graphBtn := btnStyle.Copy().Foreground(lipgloss.Color("10")).Bold(true).Render("[G] Graph")
+	mapBtn := btnStyle.Copy().Foreground(lipgloss.Color("13")).Bold(true).Render("[N] Map")
+	mitmBar := btnStyle.Copy().Foreground(lipgloss.Color("160")).Bold(true).Render("[M] " + m.MITMStatus)
+	processFilterBar := btnStyle.Copy().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render("[S] " + m.ProcessFilterSetting.String())
+	protoFilterBar := btnStyle.Copy().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render("[F] " + m.ActiveProtocolFilter)
+	settingsBtn := btnStyle.Copy().MarginRight(0).Foreground(lipgloss.Color(m.getTheme().Accent)).Render("[S] Settings")
+
 	activeFilterBar := ""
 	if m.ActiveFilter != "" {
-		activeFilterBar = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" Active Filter: ") +
-			lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Render(m.ActiveFilter)
+		activeFilterBar = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" ISP: ") +
+			lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Render(m.ActiveFilter) + " "
 	}
+
 	activeProcessSearchBar := ""
 	if m.ActiveProcessSearch != "" {
-		activeProcessSearchBar = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" Process Search: ") +
-			lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Render(m.ActiveProcessSearch)
+		activeProcessSearchBar = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" Search: ") +
+			lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Render(m.ActiveProcessSearch) + " "
 	}
 
-	processFilterBar := lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render(fmt.Sprintf(" [S] Filter: %s ", m.ProcessFilterSetting.String()))
-	protoFilterBar := lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render(fmt.Sprintf(" [F] Proto: %s ", m.ActiveProtocolFilter))
-	mitmBar := lipgloss.NewStyle().Foreground(lipgloss.Color("160")).Bold(true).Render(" [M] " + m.MITMStatus + " ")
-	settingsBtn := lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Background(lipgloss.Color("235")).Render(" [S] Settings ")
+	legend := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" [j/k] Nav [Enter] View [g] Graph [n] Map [t] Traffic [;] Search [/] Filter [S] Settings [?] Help ")
+	statusLine := lipgloss.JoinHorizontal(lipgloss.Left, captureBar, scrollBar, graphBtn, mapBtn, mitmBar, processFilterBar, protoFilterBar, activeFilterBar, activeProcessSearchBar)
 
-	footer := lipgloss.JoinHorizontal(lipgloss.Left, captureBar, mitmBar, processFilterBar, protoFilterBar, activeFilterBar, activeProcessSearchBar)
+	filler := strings.Repeat(" ", max(0, m.Width-lipgloss.Width(statusLine)-lipgloss.Width(settingsBtn)))
+	fullStatusLine := lipgloss.JoinHorizontal(lipgloss.Left, statusLine, filler, settingsBtn)
 
-	fillerWidth := m.Width - lipgloss.Width(footer) - lipgloss.Width(settingsBtn)
-	if fillerWidth > 0 {
-		footer = lipgloss.JoinHorizontal(lipgloss.Left, footer, strings.Repeat(" ", fillerWidth), settingsBtn)
-	}
-
+	footer := lipgloss.JoinVertical(lipgloss.Left, legend, fullStatusLine)
 	if bottomBar != "" {
 		footer = lipgloss.JoinVertical(lipgloss.Left, bottomBar, footer)
 	}
@@ -1503,7 +1535,7 @@ func (m *Model) getPacketDetailContent() string {
 		exportStatus = lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render("\n" + m.ExportStatus)
 	}
 
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[E] Export Report • [Esc/q] Back")
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[E] Export Report • [Mouse Wheel] Scroll • [Esc/q] Back")
 	content := lipgloss.JoinVertical(lipgloss.Left, title, style.Render(details), exportStatus, help)
 	return content
 }
@@ -1664,7 +1696,7 @@ func (m *Model) renderGraphMode() string {
 		scrollInfo = fmt.Sprintf(" [Scrolling: %d points back]", m.GraphScrollOffset)
 	}
 
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\nArrows (Left/Right): Scroll History • Press 'g' or 'Esc' to return." + scrollInfo)
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[←/→] Scroll History • [g/Esc/q] Return" + scrollInfo)
 
 	return landingPageStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Width(m.Width - 4).Height(m.Height - 2).Render(
 		lipgloss.JoinVertical(lipgloss.Center, title, "\n", inChart, "\n", outChart, topTalkersStr, help),
@@ -1710,7 +1742,7 @@ Go Version: %s
 
 	ollamaStatus := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).SetString(m.OllamaStatus)
 
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("\nPress 'q', 'h', or 'Enter' to start monitoring.")
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("\n[Enter/h] Start Monitoring • [q] Quit")
 
 	content := lipgloss.JoinVertical(lipgloss.Center,
 		title.Render(),
@@ -1845,6 +1877,132 @@ func (m *Model) getFilteredMITMPackets() []types.PacketData {
 		filtered = append(filtered, pkt)
 	}
 	return filtered
+}
+
+func (m *Model) renderNetworkTopology() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).Render(" 🗺️ Network Topology Map ")
+
+	m.Mu.RLock()
+	defer m.Mu.RUnlock()
+
+	type node struct {
+		children map[string]int
+		total    int
+	}
+
+	topology := make(map[string]node)
+	topology["This Machine"] = node{children: make(map[string]int)}
+
+	for _, p := range m.Processes {
+		for _, pkt := range p.Packets {
+			if network.IsHostIP(pkt.SrcIP) || network.IsHostIP(pkt.DstIP) {
+				target := pkt.ISP
+				if target == "Local Network" || target == "Unknown" || target == "" {
+					if network.IsHostIP(pkt.SrcIP) {
+						target = pkt.DstIP
+					} else {
+						target = pkt.SrcIP
+					}
+				}
+				root := topology["This Machine"]
+				root.children[target]++
+				root.total++
+				topology["This Machine"] = root
+			} else if network.IsMITMActive() {
+				if _, ok := topology[pkt.SrcIP]; !ok {
+					topology[pkt.SrcIP] = node{children: make(map[string]int)}
+				}
+				root := topology[pkt.SrcIP]
+				root.children[pkt.DstIP]++
+				root.total++
+				topology[pkt.SrcIP] = root
+			}
+		}
+	}
+
+	nodeStyle := lipgloss.NewStyle().Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
+	thisMachineBox := nodeStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Foreground(lipgloss.Color(m.getTheme().Primary)).Bold(true).Render(" THIS MACHINE ")
+
+	type childInfo struct {
+		name  string
+		count int
+	}
+	var localChildren, externalChildren []childInfo
+	for child, count := range topology["This Machine"].children {
+		if network.IsLocalIP(child) {
+			localChildren = append(localChildren, childInfo{child, count})
+		} else {
+			externalChildren = append(externalChildren, childInfo{child, count})
+		}
+	}
+	sort.Slice(localChildren, func(i, j int) bool { return localChildren[i].count > localChildren[j].count })
+	sort.Slice(externalChildren, func(i, j int) bool { return externalChildren[i].count > externalChildren[j].count })
+
+	renderBranch := func(name string, color string, items []childInfo) string {
+		if len(items) == 0 {
+			return ""
+		}
+		var sb strings.Builder
+		header := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render(" [" + name + "]")
+		sb.WriteString(header + "\n")
+		grey := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+		for i, item := range items {
+			pref := " ├─ "
+			if i == len(items)-1 {
+				pref = " └─ "
+			}
+			countStr := grey.Render(fmt.Sprintf(" (%d pkts)", item.count))
+			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(pref) + item.name + countStr + "\n")
+		}
+		return sb.String()
+	}
+
+	lanBranch := renderBranch("LAN / Local", "39", localChildren)
+	wanBranch := renderBranch("WAN / Internet", "205", externalChildren)
+
+	branches := lipgloss.JoinHorizontal(lipgloss.Top, lanBranch, "    ", wanBranch)
+
+	var mitmContent string
+	mitmRoots := []string{}
+	for k := range topology {
+		if k != "This Machine" {
+			mitmRoots = append(mitmRoots, k)
+		}
+	}
+	sort.Strings(mitmRoots)
+
+	if len(mitmRoots) > 0 {
+		var msb strings.Builder
+		msb.WriteString("\n" + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("160")).Render(" Intercepted Peer-to-Peer Traffic ") + "\n")
+		for _, root := range mitmRoots {
+			children := []childInfo{}
+			for c, count := range topology[root].children {
+				children = append(children, childInfo{c, count})
+			}
+			sort.Slice(children, func(i, j int) bool {
+				return children[i].count > children[j].count
+			})
+			msb.WriteString(renderBranch(root, m.getTheme().Accent, children))
+		}
+		mitmContent = msb.String()
+	}
+
+	mainMap := lipgloss.JoinVertical(lipgloss.Center,
+		thisMachineBox,
+		lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("       │"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("   ┌───┴───┐"),
+		branches,
+		mitmContent,
+	)
+
+	if len(topology["This Machine"].children) == 0 && len(mitmRoots) == 0 {
+		mainMap = "\n    (No active connections discovered yet)\n"
+	}
+
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[n/q/Esc] Return to Dashboard")
+	return landingPageStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Width(m.Width - 4).Height(m.Height - 2).Render(
+		lipgloss.JoinVertical(lipgloss.Center, title, "\n", mainMap, help),
+	)
 }
 
 type CustomList struct {

@@ -202,3 +202,35 @@ func GetCategory(name string) string {
 	}
 	return "Other"
 }
+
+func IdentifyDevice(mac string) string {
+	if mac == "" {
+		return "Unknown Device"
+	}
+	m := strings.ToUpper(strings.ReplaceAll(mac, ":", ""))
+	if len(m) < 6 {
+		return "Unknown"
+	}
+	prefix := m[:6]
+	switch prefix {
+	case "000C29", "005056", "000569":
+		return "VMware"
+	case "080027":
+		return "VirtualBox"
+	case "B827EB", "D83ADD", "DCA632":
+		return "Raspberry Pi"
+	case "00163E":
+		return "Xen VM"
+	case "001A11", "3C5AB4":
+		return "Google"
+	case "0017F2", "001C42", "F01898":
+		return "Apple"
+	case "2C337A", "00155D":
+		return "Microsoft"
+	case "AC8674", "E4E0C5":
+		return "Espressif"
+	case "00E04C":
+		return "Realtek"
+	}
+	return "OUI:" + prefix
+}

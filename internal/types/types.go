@@ -9,6 +9,8 @@ type PacketData struct {
 	Timestamp   time.Time
 	SrcIP       string
 	DstIP       string
+	SrcMAC      string
+	DstMAC      string
 	SrcPort     string
 	DstPort     string
 	Protocol    string
@@ -57,6 +59,8 @@ type HTTPInfo struct {
 	Timestamp   time.Time
 	SrcIP       string
 	DstIP       string
+	SrcMAC      string
+	DstMAC      string
 	SrcPort     string
 	DstPort     string
 	Protocol    string

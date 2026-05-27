@@ -8,7 +8,6 @@ import (
 	"strings"
 )
 
-
 func Compile(srcPath string) error {
 	src, err := os.Open(srcPath)
 	if err != nil {
@@ -251,7 +250,6 @@ func Compile(srcPath string) error {
 			}
 			currentIsIf = true
 
-			// New logic: Find action word (PRINT/CALL/BLOCK) to separate condition
 			actionIdx := -1
 			for i, p := range parts {
 				u := strings.ToUpper(p)
@@ -295,6 +293,7 @@ func Compile(srcPath string) error {
 		return err
 	}
 	defer dest.Close()
+
 	dest.Write([]byte("LIGMA01"))
 
 	script := CompiledScript{

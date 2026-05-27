@@ -19,9 +19,9 @@ import (
 
 type instruction struct {
 	Op      string
-	Value   string        // Comparison value or literal
-	Message string        // Output message
-	Body    []instruction // For nested instructions like WHILE
+	Value   string
+	Message string
+	Body    []instruction
 }
 
 type CompiledScript struct {
@@ -29,8 +29,6 @@ type CompiledScript struct {
 	Functions map[string][]instruction
 	Imports   []string
 }
-
-// ScriptPlugin implements types.Plugin for SharkScript.
 type ScriptPlugin struct {
 	Filename     string
 	Instructions []instruction

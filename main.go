@@ -104,6 +104,14 @@ func main() {
 				continue
 			}
 			var srcIP, dstIP string
+			var srcMAC, dstMAC string
+
+			if ethLayer := packet.Layer(layers.LayerTypeEthernet); ethLayer != nil {
+				eth, _ := ethLayer.(*layers.Ethernet)
+				srcMAC = eth.SrcMAC.String()
+				dstMAC = eth.DstMAC.String()
+			}
+
 			var srcPort, dstPort string
 			var protocol string
 
@@ -161,6 +169,8 @@ func main() {
 					Timestamp:   time.Now(),
 					SrcIP:       srcIP,
 					DstIP:       dstIP,
+					SrcMAC:      srcMAC,
+					DstMAC:      dstMAC,
 					SrcPort:     srcPort,
 					DstPort:     dstPort,
 					Protocol:    protocol,
