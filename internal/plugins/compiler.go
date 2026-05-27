@@ -204,12 +204,8 @@ func Compile(srcPath string) error {
 				if len(parts) < 4 {
 					return fmt.Errorf("line %d: HTTP POST requires URL and body", lineNum)
 				}
-				ins.Op, ins.Value = "HTTP_POST", parts[2]
-				if len(parts) > 4 {
-					ins.Message = strings.Join(parts[3:len(parts)-1], " ") + " | " + parts[len(parts)-1]
-				} else {
-					ins.Message = strings.Join(parts[3:], " ")
-				}
+				ins.Op = "POST"
+				ins.Message = parts[2] + " " + strings.Join(parts[3:], " ")
 			}
 		case "PRINT":
 			ins.Op, ins.Message = "PRINT", strings.Join(parts[1:], " ")

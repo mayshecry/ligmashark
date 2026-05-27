@@ -119,6 +119,10 @@ func LoadThreatBlocklist() map[string]bool {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return blocklist
+	}
+
 	var data struct {
 		QueryStatus string                   `json:"query_status"`
 		Data        []map[string]interface{} `json:"data"`

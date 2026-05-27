@@ -168,9 +168,24 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			parts := strings.SplitN(msg, " ", 2)
 			if len(parts) == 2 {
 				url, body := parts[0], parts[1]
-				go func(u, b string) {
-					http.Post(u, "application/json", strings.NewReader(b))
-				}(url, body)
+				go func(u, b string, h map[string]string) {
+					req, err := http.NewRequest("POST", u, strings.NewReader(b))
+					if err != nil || req == nil {
+						return
+					}
+					headers := make(map[string]string)
+					for k, v := range h {
+						headers[k] = v
+					}
+					req.Header.Set("Content-Type", "application/json")
+					for k, v := range h {
+						req.Header.Set(k, v)
+					}
+					resp, err := http.DefaultClient.Do(req)
+					if err == nil {
+						resp.Body.Close()
+					}
+				}(url, body, s.headers)
 			}
 		case "IF_COMPLEX", "IF_COMPLEX_PRINT", "IF_COMPLEX_CALL", "IF_COMPLEX_BLOCK", "IF_COMPLEX_EXEC", "IF_COMPLEX_POST", "IF_COMPLEX_BREAK":
 			if s.evalLogic(val, pkt) {
@@ -288,9 +303,20 @@ func (s *ScriptPlugin) handleAction(op, message, value string, pkt *types.Packet
 			parts := strings.SplitN(msg, " ", 2)
 			if len(parts) == 2 {
 				url, body := parts[0], parts[1]
-				go func(u, b string) {
-					http.Post(u, "application/json", strings.NewReader(b))
-				}(url, body)
+				go func(u, b string, h map[string]string) {
+					req, err := http.NewRequest("POST", u, strings.NewReader(b))
+					if err != nil || req == nil {
+						return
+					}
+					req.Header.Set("Content-Type", "application/json")
+					for k, v := range h {
+						req.Header.Set(k, v)
+					}
+					resp, err := http.DefaultClient.Do(req)
+					if err == nil {
+						resp.Body.Close()
+					}
+				}(url, body, s.headers)
 			}
 		}
 	}
@@ -352,9 +378,20 @@ func (s *ScriptPlugin) handleElseAction(ins instruction, pkt *types.PacketData) 
 		parts := strings.SplitN(msg, " ", 2)
 		if len(parts) == 2 {
 			url, body := parts[0], parts[1]
-			go func(u, b string) {
-				http.Post(u, "application/json", strings.NewReader(b))
-			}(url, body)
+			go func(u, b string, h map[string]string) {
+				req, err := http.NewRequest("POST", u, strings.NewReader(b))
+				if err != nil || req == nil {
+					return
+				}
+				req.Header.Set("Content-Type", "application/json")
+				for k, v := range h {
+					req.Header.Set(k, v)
+				}
+				resp, err := http.DefaultClient.Do(req)
+				if err == nil {
+					resp.Body.Close()
+				}
+			}(url, body, s.headers)
 		}
 	}
 	return false
