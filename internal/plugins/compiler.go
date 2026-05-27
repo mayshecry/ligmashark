@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Compile parses a .shark file and writes a .ligma binary.
+
 func Compile(srcPath string) error {
 	src, err := os.Open(srcPath)
 	if err != nil {
@@ -295,8 +295,6 @@ func Compile(srcPath string) error {
 		return err
 	}
 	defer dest.Close()
-
-	// Write magic header to make it "proprietary"
 	dest.Write([]byte("LIGMA01"))
 
 	script := CompiledScript{
