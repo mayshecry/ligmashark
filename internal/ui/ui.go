@@ -434,7 +434,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if m.Mode == BettercapMode {
 			if msg.Type == tea.MouseLeft {
-				// Viewport starts at line 7 (with controls)
 				if msg.Y >= 7 && msg.Y < 7+m.BettercapViewport.Height {
 					packets := m.getFilteredMITMPackets()
 					packetCount := len(packets)
@@ -449,7 +448,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						clickedIdx := start + (msg.Y - 7)
 						if clickedIdx >= 0 && clickedIdx < packetCount {
 							if m.MITMSelectedIdx == clickedIdx {
-								// Double click behavior: Inspect
 								m.InspectedPacket = packets[clickedIdx]
 								m.Mode = PacketDetailMode
 								m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
@@ -803,7 +801,6 @@ func (m *Model) updateBettercapViewport() {
 		numVisible := m.BettercapViewport.Height
 		start := 0
 		if len(packets) > numVisible {
-			// Center selection in viewport
 			start = m.MITMSelectedIdx - (numVisible / 2)
 			if start < 0 {
 				start = 0
@@ -1229,7 +1226,6 @@ func (m *Model) renderGraphMode() string {
 	inChart := renderChart("Incoming Traffic", "10", maxIn, func(p types.BandwidthPoint) uint64 { return p.In })
 	outChart := renderChart("Outgoing Traffic", "12", maxOut, func(p types.BandwidthPoint) uint64 { return p.Out })
 
-	// Calculate Top Talkers
 	m.Mu.RLock()
 	type procStats struct {
 		name  string

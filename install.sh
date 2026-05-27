@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# Ligmashark Installation Script
-# Distro-agnostic installer for libpcap, Go compilation, and global linking.
-
 set -e
 
 if [ -f /etc/debian_version ]; then
@@ -18,14 +15,10 @@ elif [ -f /etc/fedora-release ]; then
 else
     echo "⚠️ Unknown distribution. Please ensure 'libpcap' development headers and 'go' are installed manually."
 fi
-
-
 if ! command -v go &> /dev/null; then
     echo "❌ Go is not installed or not in PATH. Please install Go 1.22+ and try again."
     exit 1
 fi
-
-
 echo "🛠️ Compiling Ligmashark..."
 go mod tidy
 go build -o ligmashark main.go
@@ -33,8 +26,6 @@ go build -o ligmashark main.go
 echo "🚚 Moving binary to /usr/local/bin..."
 sudo mv ligmashark /usr/local/bin/ligmashark
 sudo chmod +x /usr/local/bin/ligmashark
-
-
 if command -v setcap &> /dev/null; then
     echo "🔒 Setting network capabilities on binary..."
     sudo setcap cap_net_raw,cap_net_admin=eip /usr/local/bin/ligmashark
@@ -45,10 +36,4 @@ echo "✅ Installation Complete!"
 echo "🚀 You can now run the app from any terminal by typing: ligmashark"
 echo ""
 echo "Note: If you want AI analysis, make sure Ollama is installed (https://ollama.com)."
-
-
-if ! command -v ollama &> /dev/null; then
-    echo "💡 Pro-tip: Ollama was not detected. Install it to enable AI packet analysis!"
-fi
-
 exit 0

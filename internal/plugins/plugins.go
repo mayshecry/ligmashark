@@ -12,7 +12,7 @@ import (
 
 func LoadPlugins(dir string) ([]types.Plugin, error) {
 	if runtime.GOOS == "windows" {
-		return nil, nil // Go's plugin package does not support Windows
+		return nil, nil
 	}
 
 	var loadedPlugins []types.Plugin

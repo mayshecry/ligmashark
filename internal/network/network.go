@@ -71,7 +71,6 @@ func IsLocalIP(ip string) bool {
 	return strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") || strings.HasPrefix(ip, "172.1") || strings.HasPrefix(ip, "172.2") || strings.HasPrefix(ip, "172.3")
 }
 
-// IsHostIP returns true if the IP belongs to one of the local network interfaces.
 func IsHostIP(ip string) bool {
 	localIPsMu.RLock()
 	defer localIPsMu.RUnlock()
