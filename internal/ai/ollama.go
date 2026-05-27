@@ -65,8 +65,27 @@ func CheckModelInstalled(modelName string) (bool, error) {
 	return false, nil
 }
 
-func AnalyzePayload(pkt types.PacketData) (string, error) {
-	url := "http://localhost:11434/api/generate"
+func GetAvailableModels() ([]string, error) {
+	resp, err := http.Get(ollamaAPIURL + "/api/tags")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query ollama models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var tags OllamaTagsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
+		return nil, fmt.Errorf("failed to decode ollama tags response: %w", err)
+	}
+
+	var models []string
+	for _, model := range tags.Models {
+		models = append(models, model.Name)
+	}
+	return models, nil
+}
+
+func AnalyzePayload(pkt types.PacketData, modelName string) (string, error) {
+	url := ollamaAPIURL + "/api/generate"
 
 	procName := strings.ToLower(pkt.ProcessName)
 	hint := ""
@@ -77,17 +96,17 @@ func AnalyzePayload(pkt types.PacketData) (string, error) {
 	prompt := fmt.Sprintf("Analyze this network packet as a technical expert. %s"+
 		"Explain what this packet is doing and its probable intent. Be objective and technical; do not assume malicious intent or 'hacking' unless explicitly clear. "+
 		"IMPORTANT: Do not use any markdown formatting. Do not use bold text (no ** characters). Provide only plain text in a single paragraph.\n\n"+
-		"Protocol: %s\n" +
-		"Source: %s:%s\n" +
-		"Destination: %s:%s\n" +
-		"ISP: %s\n" +
-		"Process: %s\n" +
-		"Detected Service: %s\n" +
+		"Protocol: %s\n"+
+		"Source: %s:%s\n"+
+		"Destination: %s:%s\n"+
+		"ISP: %s\n"+
+		"Process: %s\n"+
+		"Detected Service: %s\n"+
 		"Payload Hex Dump:\n%s",
 		hint, pkt.Protocol, pkt.SrcIP, pkt.SrcPort, pkt.DstIP, pkt.DstPort, pkt.ISP, pkt.ProcessName, pkt.Service, pkt.Payload)
 
 	body, err := json.Marshal(map[string]interface{}{
-		"model":  "qwen2.5:0.5b",
+		"model":  modelName,
 		"prompt": prompt,
 		"stream": false,
 	})

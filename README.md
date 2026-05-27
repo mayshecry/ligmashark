@@ -12,15 +12,25 @@ Built for Arch/Chad Linux users, self-hosters, security autists, and people who 
 ![Help Menu](https://github.com/mayshecry/ligmashark/blob/main/screenshots/4.png)
 
 ---
+## 🔌 SharkScript
+
+Ligmashark features its own lightweight programming language called **SharkScript**. 
+
+The developer (**Mayshecry**) had enough of complicated shit, so he created a language that everyone can understand. It looks identical to **DuckyScript**, but instead of firing keystrokes at a USB ducky, it's designed for packet manipulation and network automation on normal devices.
+
+Check out the [SharkScript Language Reference](SHARK_LANG.md) to get started.
+
+---
 
 ## 📑 Index
 
 1. [🚀 Getting Started](#-getting-started)
 2. [✨ Core Features](docs/FEATURES.md)
 3. [⌨️ Usage & Hotkeys](docs/USAGE.md)
-4. [🔌 Plugin Development](docs/PLUGINS.md)
-5. [🛡️ Internals & Privacy](docs/INTERNALS.md)
-6. [🖥️ Platform Support](docs/FEATURES.md#platform-support)
+4. [🔌 SharkScript Reference](SHARK_LANG.md)
+5. [🔌 Plugin Development](docs/PLUGINS.md)
+6. [🛡️ Internals & Privacy](docs/INTERNALS.md)
+7. [🖥️ Platform Support](docs/FEATURES.md#platform-support)
 
 ## 🚀 Getting Started
 

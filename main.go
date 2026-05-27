@@ -23,6 +23,33 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 2 && os.Args[1] == "--compile" {
+		srcFile := os.Args[2]
+		if !strings.HasSuffix(srcFile, ".shark") {
+			fmt.Println("Error: Input file must have .shark extension")
+			os.Exit(1)
+		}
+		if err := plugins.Compile(srcFile); err != nil {
+			fmt.Printf("Compilation failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Successfully compiled %s to %s\n", srcFile, strings.TrimSuffix(srcFile, ".shark")+".ligma")
+		os.Exit(0)
+	}
+
+	if len(os.Args) > 2 && os.Args[1] == "--run" {
+		ligmaFile := os.Args[2]
+		loaded, err := plugins.LoadPluginsFromFile(ligmaFile)
+		if err != nil {
+			fmt.Printf("Execution failed: %v\n", err)
+			os.Exit(1)
+		}
+		for _, p := range loaded {
+			p.OnPacket(&types.PacketData{Timestamp: time.Now(), ProcessName: "Standalone-Runner"})
+		}
+		os.Exit(0)
+	}
+
 	processes := make(map[int32]*types.ProcItem)
 	ispCache := make(map[string]string)
 	threatBlocklist := network.LoadThreatBlocklist()
@@ -35,7 +62,7 @@ func main() {
 	allProcs, _ := process.Processes()
 	for _, p := range allProcs {
 		name, _ := p.Name()
-		processes[p.Pid] = &types.ProcItem{PID: p.Pid, Name: name}
+		processes[p.Pid] = &types.ProcItem{PID: p.Pid, Name: name, Category: network.GetCategory(name)}
 	}
 
 	var mu sync.RWMutex
@@ -114,7 +141,7 @@ func main() {
 							name, _ = p.Name()
 						}
 					}
-					processes[pid] = &types.ProcItem{PID: pid, Name: name}
+					processes[pid] = &types.ProcItem{PID: pid, Name: name, Category: network.GetCategory(name)}
 				}
 
 				remoteIP := dstIP
@@ -141,6 +168,7 @@ func main() {
 					ISP:         network.GetISP(remoteIP, ispCache),
 					Service:     network.IdentifyService(processes[pid].Name, srcPort, dstPort),
 					IsMalicious: isMalicious,
+					PID:         pid,
 				}
 				if appLayer := packet.ApplicationLayer(); appLayer != nil {
 					payload := appLayer.Payload()
@@ -177,6 +205,11 @@ func main() {
 					if len(m.MITMPackets) > 1000 {
 						m.MITMPackets = m.MITMPackets[1:]
 					}
+				}
+
+				m.GlobalPackets = append(m.GlobalPackets, pkt)
+				if len(m.GlobalPackets) > 1000 {
+					m.GlobalPackets = m.GlobalPackets[1:]
 				}
 
 				processes[pid].Packets = append(processes[pid].Packets, pkt)

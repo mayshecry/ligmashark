@@ -177,3 +177,20 @@ func IdentifyService(procName, srcPort, dstPort string) string {
 	}
 	return ""
 }
+
+func GetCategory(name string) string {
+	n := strings.ToLower(name)
+	if strings.Contains(n, "discord") || strings.Contains(n, "slack") || strings.Contains(n, "telegram") || strings.Contains(n, "zoom") || strings.Contains(n, "teams") {
+		return "Communication"
+	}
+	if strings.Contains(n, "firefox") || strings.Contains(n, "chrome") || strings.Contains(n, "brave") || strings.Contains(n, "safari") || strings.Contains(n, "msedge") || strings.Contains(n, "opera") || strings.Contains(n, "vivaldi") || strings.Contains(n, "librewolf") {
+		return "Browsers"
+	}
+	if strings.Contains(n, "mullvad") || strings.Contains(n, "proton") || strings.Contains(n, "tailscale") || strings.Contains(n, "wireguard") || strings.Contains(n, "vpn") {
+		return "VPN & Privacy"
+	}
+	if n == "system/unknown" || n == "" {
+		return "System"
+	}
+	return "Other"
+}

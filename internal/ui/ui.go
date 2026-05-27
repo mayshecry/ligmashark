@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,12 +23,10 @@ import (
 )
 
 var (
-	docStyle            = lipgloss.NewStyle().Margin(1, 2)
-	filterPrompt        = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render("Filter ISP: ")
-	filterInputStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	landingPageStyle    = lipgloss.NewStyle().Align(lipgloss.Center).Padding(2, 4).Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62"))
-	processSearchPrompt = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render("Search Process: ")
-	explStyle           = lipgloss.NewStyle().Align(lipgloss.Center).Width(60).MarginTop(1).MarginBottom(1)
+	docStyle         = lipgloss.NewStyle().Margin(1, 2)
+	filterInputStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	explStyle        = lipgloss.NewStyle().Align(lipgloss.Center).Width(60).MarginTop(1).MarginBottom(1)
+	landingPageStyle = lipgloss.NewStyle().Align(lipgloss.Center).Padding(2, 4).Border(lipgloss.RoundedBorder())
 )
 
 type UpdateMsg struct{}
@@ -51,6 +50,9 @@ const (
 	ProcessSearchMode
 	GraphMode
 	BettercapMode
+	GlobalTrafficMode
+	CategorySelectionMode
+	SettingsMode
 )
 
 type Model struct {
@@ -76,6 +78,9 @@ type Model struct {
 	SystemInfo           types.SystemInfo
 	VisiblePackets       []types.PacketData
 	InspectedPacket      types.PacketData
+	ActiveCategory       string
+	CategoryList         []string
+	CategoryCursor       int
 	MITMSelectedIdx      int
 	MITMJunkFilter       bool
 	MITMProtocolFilter   string
@@ -86,6 +91,9 @@ type Model struct {
 	BettercapViewport    CustomViewport
 	BettercapLogs        []string
 	BettercapModules     map[string]bool
+	GlobalPackets        []types.PacketData
+	GlobalViewport       CustomViewport
+	GlobalSelectedIdx    int
 	MITMPackets          []types.PacketData
 	OllamaStatus         string
 	ExportStatus         string
@@ -95,10 +103,31 @@ type Model struct {
 	LastTotalOut         uint64
 	AutoScroll           bool
 	GraphScrollOffset    int
+	SettingsCursor       int
+	UseAI                bool
+	UseMITMSetting       bool
+	AvailableModels      []string
+	SelectedModelIdx     int
+	SelectedThemeIdx     int
+}
+
+var Themes = []struct {
+	Name    string
+	Primary string
+	Accent  string
+}{
+	{"Classic Shark", "62", "205"},
+	{"Deep Sea", "24", "39"},
+	{"Hacker Console", "2", "10"},
+	{"Midnight Lavender", "141", "147"},
+	{"Crimson Fury", "124", "196"},
+	{"Electric Purple", "99", "201"},
+	{"Sakura Bloom", "197", "218"},
+	{"Cyber Orange", "130", "208"},
 }
 
 func NewModel(processes map[int32]*types.ProcItem, mu *sync.RWMutex, sysInfo types.SystemInfo) Model {
-	return Model{
+	m := Model{
 		List:                 NewCustomList("Processes"),
 		Viewport:             NewCustomViewport(),
 		SystemInfo:           sysInfo,
@@ -108,7 +137,11 @@ func NewModel(processes map[int32]*types.ProcItem, mu *sync.RWMutex, sysInfo typ
 		PacketDetailViewport: NewCustomViewport(),
 		HelpViewport:         NewCustomViewport(),
 		BettercapViewport:    NewCustomViewport(),
+		GlobalViewport:       NewCustomViewport(),
+		CategoryList:         []string{"Communication", "Browsers", "VPN & Privacy", "System", "Other", "All Traffic"},
+		ActiveCategory:       "All Traffic",
 		MITMSelectedIdx:      -1,
+		GlobalSelectedIdx:    -1,
 		BettercapModules:     make(map[string]bool),
 		MITMPackets:          make([]types.PacketData, 0),
 		MITMJunkFilter:       true,
@@ -120,7 +153,16 @@ func NewModel(processes map[int32]*types.ProcItem, mu *sync.RWMutex, sysInfo typ
 		ActiveProtocolFilter: "ALL",
 		Mode:                 LandingPageMode,
 		AutoScroll:           true,
+		UseAI:                true,
+		UseMITMSetting:       true,
+		AvailableModels:      []string{"qwen2.5:0.5b", "qwen2:0.5b", "phi3:mini", "tinyllama", "smollm:135m", "llama3.2:1b", "gemma:2b", "orca-mini", "granite-code:3b", "deepseek-coder:1.3b", "stable-code:3b"},
 	}
+	m.loadConfig()
+	return m
+}
+
+func (m *Model) getTheme() struct{ Name, Primary, Accent string } {
+	return Themes[m.SelectedThemeIdx]
 }
 
 func (m Model) Init() tea.Cmd {
@@ -153,6 +195,69 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc", "q", "?":
 				m.Mode = NormalMode
 			}
+		} else if m.Mode == CategorySelectionMode {
+			switch msg.String() {
+			case "up", "k", "left":
+				m.CategoryCursor--
+				if m.CategoryCursor < 0 {
+					m.CategoryCursor = len(m.CategoryList) - 1
+				}
+			case "down", "j", "right":
+				m.CategoryCursor++
+				if m.CategoryCursor >= len(m.CategoryList) {
+					m.CategoryCursor = 0
+				}
+			case "enter":
+				m.ActiveCategory = m.CategoryList[m.CategoryCursor]
+				m.Mode = NormalMode
+				m.refreshList()
+			case "esc", "q":
+				m.Mode = LandingPageMode
+			}
+			return m, nil
+		} else if m.Mode == SettingsMode {
+			switch msg.String() {
+			case "esc", "q", "S":
+				m.Mode = NormalMode
+			case "up", "k":
+				m.SettingsCursor--
+				if m.SettingsCursor < 0 {
+					m.SettingsCursor = 4
+				}
+			case "down", "j":
+				m.SettingsCursor++
+				if m.SettingsCursor > 4 {
+					m.SettingsCursor = 0
+				}
+			case "left", "h":
+				if m.SettingsCursor == 1 && len(m.AvailableModels) > 0 {
+					m.SelectedModelIdx = (m.SelectedModelIdx - 1 + len(m.AvailableModels)) % len(m.AvailableModels)
+				}
+				if m.SettingsCursor == 3 {
+					m.SelectedThemeIdx = (m.SelectedThemeIdx - 1 + len(Themes)) % len(Themes)
+				}
+			case "right", "l":
+				if m.SettingsCursor == 1 && len(m.AvailableModels) > 0 {
+					m.SelectedModelIdx = (m.SelectedModelIdx + 1) % len(m.AvailableModels)
+				}
+				if m.SettingsCursor == 3 {
+					m.SelectedThemeIdx = (m.SelectedThemeIdx + 1) % len(Themes)
+				}
+			case "enter", " ":
+				switch m.SettingsCursor {
+				case 0:
+					m.UseAI = !m.UseAI
+				case 1:
+					if len(m.AvailableModels) > 0 {
+						m.SelectedModelIdx = (m.SelectedModelIdx + 1) % len(m.AvailableModels)
+					}
+				case 2:
+					m.UseMITMSetting = !m.UseMITMSetting
+				case 3:
+					m.Mode = NormalMode
+				}
+			}
+			return m, nil
 		} else if m.Mode == BettercapMode {
 			if m.MITMSearchActive {
 				switch msg.String() {
@@ -281,8 +386,47 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.Mode == LandingPageMode {
 			switch msg.String() {
 			case "q", "enter", "esc", "h":
-				m.Mode = NormalMode
+				m.Mode = CategorySelectionMode
 			}
+		} else if m.Mode == GlobalTrafficMode {
+			switch msg.String() {
+			case "esc", "q", "t":
+				m.Mode = NormalMode
+			case "up", "k":
+				if len(m.GlobalPackets) > 0 {
+					m.GlobalSelectedIdx--
+					if m.GlobalSelectedIdx < 0 {
+						m.GlobalSelectedIdx = 0
+					}
+					m.updateGlobalViewport()
+				}
+			case "down", "j":
+				if len(m.GlobalPackets) > 0 {
+					m.GlobalSelectedIdx++
+					if m.GlobalSelectedIdx >= len(m.GlobalPackets) {
+						m.GlobalSelectedIdx = len(m.GlobalPackets) - 1
+					}
+					m.updateGlobalViewport()
+				}
+			case "home":
+				m.GlobalSelectedIdx = 0
+				m.updateGlobalViewport()
+			case "end", "G":
+				if len(m.GlobalPackets) > 0 {
+					m.GlobalSelectedIdx = len(m.GlobalPackets) - 1
+				}
+				m.updateGlobalViewport()
+			case "enter":
+				if m.GlobalSelectedIdx >= 0 && m.GlobalSelectedIdx < len(m.GlobalPackets) {
+					m.InspectedPacket = m.GlobalPackets[m.GlobalSelectedIdx]
+					m.Mode = PacketDetailMode
+					m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
+					return m, m.analyzePacketCmd(m.InspectedPacket)
+				}
+			default:
+				m.GlobalViewport.Update(msg)
+			}
+			return m, nil
 		} else if m.Mode == FilterMode {
 			switch msg.String() {
 			case "enter":
@@ -333,6 +477,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Mode = BettercapMode
 				m.updateBettercapViewport()
 				return m, nil
+			case "S":
+				m.Mode = SettingsMode
+				return m, nil
 			case "m":
 				if network.IsMITMActive() {
 					err := network.StopMITM()
@@ -380,8 +527,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Mu.Unlock()
 				m.updateViewport()
 
+			case "t":
+				m.Mode = GlobalTrafficMode
+				m.updateGlobalViewport()
+				return m, nil
 			case "h", "q":
-				m.Mode = LandingPageMode
+				m.Mode = CategorySelectionMode
 				return m, nil
 			case "/":
 				m.FilterInput = ""
@@ -422,6 +573,74 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Type == tea.MouseLeft {
 				m.Mode = NormalMode
 			}
+		} else if m.Mode == CategorySelectionMode {
+			if msg.Type == tea.MouseLeft {
+				contentHeight := 4 + len(m.CategoryList)
+				startY := (m.Height-contentHeight)/2 + 2
+				if msg.Y >= startY && msg.Y < startY+len(m.CategoryList) {
+					m.CategoryCursor = msg.Y - startY
+					m.ActiveCategory = m.CategoryList[m.CategoryCursor]
+					m.Mode = NormalMode
+					m.refreshList()
+				}
+			} else if msg.Type == tea.MouseWheelUp {
+				m.CategoryCursor--
+				if m.CategoryCursor < 0 {
+					m.CategoryCursor = len(m.CategoryList) - 1
+				}
+				return m, nil
+			} else if msg.Type == tea.MouseWheelDown {
+				m.CategoryCursor++
+				if m.CategoryCursor >= len(m.CategoryList) {
+					m.CategoryCursor = 0
+				}
+				return m, nil
+			}
+		} else if m.Mode == GlobalTrafficMode {
+			if msg.Type == tea.MouseLeft {
+				if msg.Y >= 7 && msg.Y < 7+m.GlobalViewport.Height {
+					packetCount := len(m.GlobalPackets)
+					if packetCount > 0 {
+						numVisible := m.GlobalViewport.Height
+						start := m.GlobalSelectedIdx - (numVisible / 2)
+						if start < 0 {
+							start = 0
+						}
+
+						clickedIdx := start + (msg.Y - 7)
+						if clickedIdx >= 0 && clickedIdx < packetCount {
+							if m.GlobalSelectedIdx == clickedIdx {
+								m.InspectedPacket = m.GlobalPackets[clickedIdx]
+								m.Mode = PacketDetailMode
+								m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
+								return m, m.analyzePacketCmd(m.InspectedPacket)
+							}
+							m.GlobalSelectedIdx = clickedIdx
+							m.updateGlobalViewport()
+						}
+					}
+				}
+			} else if msg.Type == tea.MouseWheelUp {
+				m.GlobalSelectedIdx--
+				if m.GlobalSelectedIdx < 0 && len(m.GlobalPackets) > 0 {
+					m.GlobalSelectedIdx = 0
+				}
+				m.updateGlobalViewport()
+			} else if msg.Type == tea.MouseWheelDown {
+				m.GlobalSelectedIdx++
+				if m.GlobalSelectedIdx >= len(m.GlobalPackets) {
+					m.GlobalSelectedIdx = len(m.GlobalPackets) - 1
+				}
+				m.updateGlobalViewport()
+			}
+		} else if m.Mode == SettingsMode {
+			if msg.Type == tea.MouseWheelUp {
+				m.SettingsCursor = (m.SettingsCursor - 1 + 5) % 5
+			} else if msg.Type == tea.MouseWheelDown {
+				m.SettingsCursor = (m.SettingsCursor + 1) % 5
+			}
+			m.saveConfig()
+			return m, nil
 		} else if m.Mode == PacketDetailMode {
 			if msg.Type == tea.MouseLeft {
 				m.Mode = NormalMode
@@ -515,6 +734,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if msg.Type == tea.MouseLeft {
+				if msg.X >= m.Width-15 && msg.Y >= m.Height-2 {
+					m.Mode = SettingsMode
+					return m, nil
+				}
+			}
+
+			if msg.Type == tea.MouseLeft {
 				if msg.Y >= m.Height-1 {
 					return m, m.toggleCaptureCmd()
 				}
@@ -551,6 +777,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.PacketDetailViewport.SetSize(m.Width-4, m.Height-2)
 		m.HelpViewport.SetSize(m.Width-4, m.Height-2)
 		m.BettercapViewport.SetSize(m.Width-4, m.Height-12)
+		m.GlobalViewport.SetSize(m.Width-4, m.Height-12)
 		if m.Mode == PacketDetailMode {
 			m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
 			return m, nil
@@ -606,6 +833,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateHistory()
 		if m.Mode == BettercapMode {
 			m.updateBettercapViewport()
+		} else if m.Mode == GlobalTrafficMode {
+			m.updateGlobalViewport()
 		}
 		return m, tea.Tick(time.Second, func(t time.Time) tea.Msg {
 			return UpdateMsg{}
@@ -615,12 +844,51 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) analyzePacketCmd(pkt types.PacketData) tea.Cmd {
+	if !m.UseAI {
+		return nil
+	}
+	modelName := m.getSelectedModelName()
 	return func() tea.Msg {
-		analysis, err := ai.AnalyzePayload(pkt)
+		analysis, err := ai.AnalyzePayload(pkt, modelName)
 		if err != nil {
 			return AIResultMsg("AI Analysis failed: " + err.Error())
 		}
 		return AIResultMsg(analysis)
+	}
+}
+
+func (m *Model) saveConfig() {
+	cfg := struct {
+		UseAI          bool `json:"use_ai"`
+		UseMITMSetting bool `json:"use_mitm"`
+		ModelIdx       int  `json:"model_idx"`
+		ThemeIdx       int  `json:"theme_idx"`
+	}{
+		UseAI:          m.UseAI,
+		UseMITMSetting: m.UseMITMSetting,
+		ModelIdx:       m.SelectedModelIdx,
+		ThemeIdx:       m.SelectedThemeIdx,
+	}
+	data, _ := json.Marshal(cfg)
+	_ = os.WriteFile("config.json", data, 0644)
+}
+
+func (m *Model) loadConfig() {
+	data, err := os.ReadFile("config.json")
+	if err != nil {
+		return
+	}
+	var cfg struct {
+		UseAI          bool `json:"use_ai"`
+		UseMITMSetting bool `json:"use_mitm"`
+		ModelIdx       int  `json:"model_idx"`
+		ThemeIdx       int  `json:"theme_idx"`
+	}
+	if err := json.Unmarshal(data, &cfg); err == nil {
+		m.UseAI = cfg.UseAI
+		m.UseMITMSetting = cfg.UseMITMSetting
+		m.SelectedModelIdx = cfg.ModelIdx
+		m.SelectedThemeIdx = cfg.ThemeIdx
 	}
 }
 
@@ -676,14 +944,16 @@ func (m *Model) exportPacketCmd(pkt types.PacketData) tea.Cmd {
 		sb.WriteString("AI ANALYSIS\n")
 		sb.WriteString("-----------\n")
 		if pkt.AIAnalysis != "" {
-			sb.WriteString(pkt.AIAnalysis + "\n\n")
+			sb.WriteString(pkt.AIAnalysis)
+			sb.WriteString("\n\n")
 		} else {
 			sb.WriteString("Analysis not completed at time of export.\n\n")
 		}
 
 		sb.WriteString("RAW PAYLOAD\n")
 		sb.WriteString("-----------\n")
-		sb.WriteString(pkt.Payload + "\n")
+		sb.WriteString(pkt.Payload)
+		sb.WriteString("\n")
 
 		err := os.WriteFile(filename, []byte(sb.String()), 0644)
 		if err != nil {
@@ -722,7 +992,7 @@ func (m *Model) SetupOllama(p *tea.Program) {
 	}
 	update("Ollama server is running.")
 
-	modelName := "qwen2.5:0.5b"
+	modelName := m.getSelectedModelName()
 	update(fmt.Sprintf("Checking for model '%s'...", modelName))
 	installed, err := ai.CheckModelInstalled(modelName)
 	if err != nil {
@@ -741,6 +1011,17 @@ func (m *Model) SetupOllama(p *tea.Program) {
 		update(fmt.Sprintf("Model '%s' pulled successfully.", modelName))
 	} else {
 		update(fmt.Sprintf("Model '%s' is installed.", modelName))
+	}
+
+	fetched, _ := ai.GetAvailableModels()
+	uniqueModels := make(map[string]bool)
+	for _, mod := range m.AvailableModels {
+		uniqueModels[mod] = true
+	}
+	for _, mod := range fetched {
+		if !uniqueModels[mod] {
+			m.AvailableModels = append(m.AvailableModels, mod)
+		}
 	}
 
 	if lastStatus == fmt.Sprintf("Model '%s' is installed.", modelName) || lastStatus == fmt.Sprintf("Model '%s' pulled successfully.", modelName) {
@@ -817,8 +1098,8 @@ func (m *Model) updateBettercapViewport() {
 
 		for i := start; i < end; i++ {
 			pkt := packets[i]
-			line := fmt.Sprintf("%-10s %-8s %-15s %-15s %-20s %d",
-				pkt.Timestamp.Format("15:04:05"), pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ISP, pkt.Length)
+			line := fmt.Sprintf("%-10s %-8s %-15s %-15s %-15s %-20s %d",
+				pkt.Timestamp.Format("15:04:05"), pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ProcessName, pkt.ISP, pkt.Length)
 
 			style := lipgloss.NewStyle().MaxWidth(m.BettercapViewport.Width).MaxHeight(1)
 			if i == m.MITMSelectedIdx {
@@ -826,11 +1107,56 @@ func (m *Model) updateBettercapViewport() {
 			} else if pkt.IsMalicious {
 				style = style.Foreground(lipgloss.Color("9"))
 			}
-			sb.WriteString(style.Render(line) + "\n")
+			sb.WriteString(style.Render(line))
+			sb.WriteString("\n")
 		}
 	}
 
 	m.BettercapViewport.SetContent(sb.String())
+}
+
+func (m *Model) updateGlobalViewport() {
+	var sb strings.Builder
+	m.Mu.RLock()
+	packets := m.GlobalPackets
+	m.Mu.RUnlock()
+
+	if m.GlobalSelectedIdx >= len(packets) {
+		m.GlobalSelectedIdx = len(packets) - 1
+	}
+	if m.GlobalSelectedIdx == -1 && len(packets) > 0 {
+		m.GlobalSelectedIdx = len(packets) - 1
+	}
+
+	numVisible := m.GlobalViewport.Height
+	start := 0
+	if len(packets) > numVisible {
+		start = m.GlobalSelectedIdx - (numVisible / 2)
+		if start < 0 {
+			start = 0
+		}
+		if start+numVisible > len(packets) {
+			start = len(packets) - numVisible
+		}
+	}
+
+	end := start + numVisible
+	if end > len(packets) {
+		end = len(packets)
+	}
+
+	for i := start; i < end; i++ {
+		pkt := packets[i]
+		line := fmt.Sprintf("%-10s %-8s %-15s %-15s %-15s %-20s %d",
+			pkt.Timestamp.Format("15:04:05"), pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ProcessName, pkt.ISP, pkt.Length)
+
+		style := lipgloss.NewStyle().MaxWidth(m.GlobalViewport.Width).MaxHeight(1)
+		if i == m.GlobalSelectedIdx {
+			style = style.Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
+		}
+		sb.WriteString(style.Render(line) + "\n")
+	}
+	m.GlobalViewport.SetContent(sb.String())
 }
 
 func (m *Model) refreshList() {
@@ -929,7 +1255,7 @@ func (m *Model) updateViewport() {
 			line := fmt.Sprintf("%-8s %-15s %-15s %-20s %-15s %d", pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ISP, info, pkt.Length)
 			style := lipgloss.NewStyle().MaxWidth(m.Viewport.Width).MaxHeight(1)
 			if pkt.IsMalicious {
-				style = style.Foreground(lipgloss.Color("9")) // Red
+				style = style.Foreground(lipgloss.Color("9"))
 			}
 			buf.WriteString(style.Render(line) + "\n")
 		}
@@ -943,7 +1269,7 @@ func (m *Model) updateViewport() {
 func (m *Model) renderHelpMenuContent() string {
 	width := m.HelpViewport.Width
 	style := lipgloss.NewStyle().Width(width)
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).Render("Ligmashark Hotkeys")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).Render("Ligmashark Hotkeys")
 
 	helpText := `
 Global:
@@ -967,6 +1293,8 @@ Traffic View:
   f                : Cycle Protocol Filter (TCP/UDP/ICMP)
   m                : Toggle MITM (Bettercap)
   b                : Toggle Bettercap Dashboard
+  t                : Toggle Global Traffic View
+  S                : Open Settings Menu
   c                : Clear history for selected process
   e                : Export Packet Report (in Detail view)
   ;                : Search/Filter process by name
@@ -978,21 +1306,24 @@ Traffic View:
 func (m *Model) View() string {
 	if m.Mode == LandingPageMode {
 		return m.renderLandingPage()
-	}
-	if m.Mode == PacketDetailMode {
+	} else if m.Mode == PacketDetailMode {
 		return m.PacketDetailViewport.View()
-	}
-	if m.Mode == HelpMode {
+	} else if m.Mode == HelpMode {
 		m.HelpViewport.SetContent(m.renderHelpMenuContent())
 		return m.HelpViewport.View()
-	}
-	if m.Mode == GraphMode {
+	} else if m.Mode == CategorySelectionMode {
+		return m.renderCategorySelection()
+	} else if m.Mode == GraphMode {
 		return m.renderGraphMode()
-	}
-	if m.Mode == BettercapMode {
+	} else if m.Mode == BettercapMode {
 		return m.renderBettercapMode()
+	} else if m.Mode == SettingsMode {
+		return m.renderSettingsMode()
+	} else if m.Mode == GlobalTrafficMode {
+		return m.renderGlobalTrafficMode()
 	}
 
+	m.List.PrimaryColor = m.getTheme().Primary
 	listRender := m.List.View()
 	viewportRender := m.Viewport.View()
 
@@ -1003,7 +1334,7 @@ func (m *Model) View() string {
 			cursor = "█"
 		}
 		bottomBar = lipgloss.JoinHorizontal(lipgloss.Left,
-			filterPrompt,
+			lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Render("Filter ISP: "),
 			filterInputStyle.Render(m.FilterInput+cursor),
 		)
 	} else if m.Mode == ProcessSearchMode {
@@ -1012,7 +1343,7 @@ func (m *Model) View() string {
 			cursor = "█"
 		}
 		bottomBar = lipgloss.JoinHorizontal(lipgloss.Left,
-			processSearchPrompt,
+			lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Render("Search Process: "),
 			filterInputStyle.Render(m.ProcessSearchInput+cursor),
 		)
 	}
@@ -1022,23 +1353,30 @@ func (m *Model) View() string {
 		autoScrollStatus = "OFF"
 	}
 
-	captureBar := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(" [P] " + m.CaptureStatus + " [A] Auto-scroll: " + autoScrollStatus + " ")
+	captureBar := lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render(" [P] " + m.CaptureStatus + " [A] Auto-scroll: " + autoScrollStatus + " ")
 	activeFilterBar := ""
 	if m.ActiveFilter != "" {
 		activeFilterBar = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" Active Filter: ") +
-			lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render(m.ActiveFilter)
+			lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Render(m.ActiveFilter)
 	}
 	activeProcessSearchBar := ""
 	if m.ActiveProcessSearch != "" {
 		activeProcessSearchBar = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" Process Search: ") +
-			lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render(m.ActiveProcessSearch)
+			lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Render(m.ActiveProcessSearch)
 	}
 
-	processFilterBar := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(fmt.Sprintf(" [S] Filter: %s ", m.ProcessFilterSetting.String()))
-	protoFilterBar := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(fmt.Sprintf(" [F] Proto: %s ", m.ActiveProtocolFilter))
+	processFilterBar := lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render(fmt.Sprintf(" [S] Filter: %s ", m.ProcessFilterSetting.String()))
+	protoFilterBar := lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render(fmt.Sprintf(" [F] Proto: %s ", m.ActiveProtocolFilter))
 	mitmBar := lipgloss.NewStyle().Foreground(lipgloss.Color("160")).Bold(true).Render(" [M] " + m.MITMStatus + " ")
+	settingsBtn := lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Background(lipgloss.Color("235")).Render(" [S] Settings ")
 
 	footer := lipgloss.JoinHorizontal(lipgloss.Left, captureBar, mitmBar, processFilterBar, protoFilterBar, activeFilterBar, activeProcessSearchBar)
+
+	fillerWidth := m.Width - lipgloss.Width(footer) - lipgloss.Width(settingsBtn)
+	if fillerWidth > 0 {
+		footer = lipgloss.JoinHorizontal(lipgloss.Left, footer, strings.Repeat(" ", fillerWidth), settingsBtn)
+	}
+
 	if bottomBar != "" {
 		footer = lipgloss.JoinVertical(lipgloss.Left, bottomBar, footer)
 	}
@@ -1050,6 +1388,67 @@ func (m *Model) View() string {
 	)
 
 	return lipgloss.JoinVertical(lipgloss.Left, mainContent, footer)
+}
+
+func (m *Model) renderCategorySelection() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).Render("Select Process Category")
+
+	var sb strings.Builder
+	for i, cat := range m.CategoryList {
+		cursor := "  "
+		style := lipgloss.NewStyle()
+		if i == m.CategoryCursor {
+			cursor = "> "
+			style = style.Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true)
+		}
+		sb.WriteString(cursor + style.Render(cat) + "\n")
+	}
+
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[j/k] Navigate • [Enter] Select • [Esc] Back")
+
+	content := lipgloss.JoinVertical(lipgloss.Center, title, "\n", sb.String(), help)
+	return landingPageStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Width(m.Width - 4).Height(m.Height - 2).Render(content)
+}
+
+func (m *Model) renderSettingsMode() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).Render(" Ligmashark Settings ")
+
+	options := []string{
+		fmt.Sprintf("AI Analysis:    %s", m.toggleLabel(m.UseAI)),
+		fmt.Sprintf("AI Model:       %s", m.getSelectedModelName()),
+		fmt.Sprintf("MITM Features:  %s", m.toggleLabel(m.UseMITMSetting)),
+		fmt.Sprintf("Theme:          %s", m.getTheme().Name),
+		"Back to Monitor",
+	}
+
+	var sb strings.Builder
+	for i, opt := range options {
+		cursor := "  "
+		style := lipgloss.NewStyle()
+		if i == m.SettingsCursor {
+			cursor = "> "
+			style = style.Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true)
+		}
+		sb.WriteString(cursor + style.Render(opt) + "\n")
+	}
+
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[j/k] Navigate • [h/l] Cycle Option • [Enter] Select • [S/Esc] Exit")
+	content := lipgloss.JoinVertical(lipgloss.Center, title, "\n", sb.String(), help)
+	return landingPageStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Width(m.Width - 4).Height(m.Height - 2).Render(content)
+}
+
+func (m *Model) getSelectedModelName() string {
+	if len(m.AvailableModels) == 0 {
+		return "qwen2.5:0.5b"
+	}
+	return m.AvailableModels[m.SelectedModelIdx]
+}
+
+func (m *Model) toggleLabel(b bool) string {
+	if b {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("[ENABLED]")
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("160")).Render("[DISABLED]")
 }
 
 func (m *Model) IsCapturePaused() bool {
@@ -1071,7 +1470,7 @@ func (m *Model) toggleCaptureCmd() tea.Cmd {
 func (m *Model) getPacketDetailContent() string {
 	width := m.PacketDetailViewport.Width
 	style := lipgloss.NewStyle().Width(width)
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).Render("Packet Overview")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).Render("Packet Overview")
 
 	aiText := m.InspectedPacket.AIAnalysis
 	if aiText == "" {
@@ -1101,7 +1500,7 @@ func (m *Model) getPacketDetailContent() string {
 
 	exportStatus := ""
 	if m.ExportStatus != "" {
-		exportStatus = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render("\n" + m.ExportStatus)
+		exportStatus = lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render("\n" + m.ExportStatus)
 	}
 
 	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[E] Export Report • [Esc/q] Back")
@@ -1135,6 +1534,11 @@ func (m *Model) cycleProcessFilter() {
 }
 
 func (m *Model) shouldShowProcess(p *types.ProcItem) bool {
+	if m.ActiveCategory != "" && m.ActiveCategory != "All Traffic" {
+		if p.Category != m.ActiveCategory {
+			return false
+		}
+	}
 	if m.ProcessFilterSetting == FilterEverything {
 		return true
 	}
@@ -1158,7 +1562,7 @@ func (m *Model) shouldShowProcess(p *types.ProcItem) bool {
 }
 
 func (m *Model) renderGraphMode() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).Render("Network Traffic (Bytes/sec)")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).Render("Network Traffic (Bytes/sec)")
 
 	var maxIn, maxOut uint64
 	for _, p := range m.History {
@@ -1177,7 +1581,8 @@ func (m *Model) renderGraphMode() string {
 
 	renderChart := func(label string, color string, maxValue uint64, getVal func(types.BandwidthPoint) uint64) string {
 		var sb strings.Builder
-		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render(label) + "\n")
+		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render(label))
+		sb.WriteString("\n")
 
 		chartWidth := m.Width - 20
 		if chartWidth < 10 {
@@ -1251,7 +1656,7 @@ func (m *Model) renderGraphMode() string {
 		for i := 0; i < limit; i++ {
 			lines = append(lines, fmt.Sprintf("%s (%d): %s", stats[i].name, stats[i].pid, formatBytes(stats[i].total)))
 		}
-		topTalkersStr = "\n" + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")).Render("Top Talkers (Session): ") + strings.Join(lines, "  │  ")
+		topTalkersStr = "\n" + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Accent)).Render("Top Talkers (Session): ") + strings.Join(lines, "  │  ")
 	}
 
 	scrollInfo := ""
@@ -1261,7 +1666,7 @@ func (m *Model) renderGraphMode() string {
 
 	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\nArrows (Left/Right): Scroll History • Press 'g' or 'Esc' to return." + scrollInfo)
 
-	return landingPageStyle.Width(m.Width - 4).Height(m.Height - 2).Render(
+	return landingPageStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Width(m.Width - 4).Height(m.Height - 2).Render(
 		lipgloss.JoinVertical(lipgloss.Center, title, "\n", inChart, "\n", outChart, topTalkersStr, help),
 	)
 }
@@ -1280,7 +1685,7 @@ func formatBytes(b uint64) string {
 }
 
 func (m *Model) renderLandingPage() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62")).SetString("Ligmashark")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).SetString("Ligmashark")
 	author := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("Created by val (@mayshecry) on GitHub")
 
 	platformWarn := ""
@@ -1316,7 +1721,28 @@ Go Version: %s
 		help.Render(),
 	)
 
-	return landingPageStyle.Width(m.Width - 4).Height(m.Height - 2).Render(content)
+	return landingPageStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Width(m.Width - 4).Height(m.Height - 2).Render(content)
+}
+
+func (m *Model) renderGlobalTrafficMode() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).Padding(0, 1).Render(" Global Real-time Traffic ")
+	description := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true).Render("Monitoring all local process traffic mixed")
+
+	tableHeader := lipgloss.NewStyle().Foreground(lipgloss.Color("249")).Bold(true).Render(
+		fmt.Sprintf("  %-10s %-8s %-15s %-15s %-15s %-20s %s", "TIME", "PROTO", "SOURCE", "DEST", "PROCESS", "ISP", "LEN"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		description,
+		"\n",
+		tableHeader,
+		lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, true, false).BorderForeground(lipgloss.Color("237")).Width(m.Width-4).Render(""),
+		m.GlobalViewport.View(),
+	)
+
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("[j/k] Scroll • [Enter] Inspect • [t/Esc] Back")
+
+	return docStyle.Render(lipgloss.JoinVertical(lipgloss.Left, content, "\n", help))
 }
 
 func (m *Model) renderBettercapMode() string {
@@ -1357,7 +1783,7 @@ func (m *Model) renderBettercapMode() string {
 	controls := lipgloss.JoinHorizontal(lipgloss.Center, filterInfo, searchBar)
 
 	tableHeader := lipgloss.NewStyle().Foreground(lipgloss.Color("249")).Bold(true).Render(
-		fmt.Sprintf("  %-10s %-8s %-15s %-15s %-20s %s", "TIME", "PROTO", "SOURCE", "DEST", "ISP", "LEN"))
+		fmt.Sprintf("  %-10s %-8s %-15s %-15s %-15s %-20s %s", "TIME", "PROTO", "SOURCE", "DEST", "PROCESS", "ISP", "LEN"))
 
 	exportStatus := ""
 	if m.ExportStatus != "" {
@@ -1426,12 +1852,20 @@ type CustomList struct {
 	items         []types.ProcItem
 	selected      int
 	Width, Height int
+	PrimaryColor  string
 }
 
 func NewCustomList(title string) CustomList {
 	return CustomList{
 		title: title,
 	}
+}
+
+func (cl CustomList) getPrimary() string {
+	if cl.PrimaryColor == "" {
+		return "62"
+	}
+	return cl.PrimaryColor
 }
 
 func (cl *CustomList) SetItems(items []types.ProcItem) {
@@ -1467,13 +1901,15 @@ func (cl *CustomList) Update(msg tea.Msg) {
 			if cl.selected < 0 {
 				cl.selected = 0
 			}
-		case "down", "j", "end", "G":
+		case "down", "j":
 			cl.selected++
 			if cl.selected >= len(cl.items) {
 				cl.selected = len(cl.items) - 1
 			}
 		case "home":
 			cl.selected = 0
+		case "end", "G":
+			cl.selected = len(cl.items) - 1
 		}
 	}
 }
@@ -1504,7 +1940,7 @@ func (cl CustomList) View() string {
 			style = style.Foreground(lipgloss.Color("9"))
 		}
 		if i == cl.selected {
-			style = style.Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
+			style = style.Background(lipgloss.Color(cl.getPrimary())).Foreground(lipgloss.Color("230"))
 		}
 		sb.WriteString(style.Render(line) + "\n")
 	}
@@ -1598,7 +2034,8 @@ func (cv CustomViewport) View() string {
 	var sb strings.Builder
 	for i := start; i < end; i++ {
 		if i < len(lines) {
-			sb.WriteString(lipgloss.NewStyle().MaxWidth(cv.Width).MaxHeight(1).Render(lines[i]) + "\n")
+			sb.WriteString(lipgloss.NewStyle().MaxWidth(cv.Width).MaxHeight(1).Render(lines[i]))
+			sb.WriteString("\n")
 		} else {
 			sb.WriteString(strings.Repeat(" ", cv.Width) + "\n")
 		}

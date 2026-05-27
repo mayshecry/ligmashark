@@ -16,6 +16,8 @@
 | `i`              | Re-select network interface         |
 | `g`              | Toggle Graph Mode                   |
 | `s`              | Cycle Process Filter (All/FG/BG)    |
+| `m`              | Toggle MITM (Bettercap)             |
+| `b`              | Open Bettercap MITM Dashboard       |
 
 ### Navigation Tips
 - **Mouse Support**: You can click on processes to select them and use the mouse wheel to scroll through packet logs.

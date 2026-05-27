@@ -6,29 +6,31 @@ import (
 )
 
 type PacketData struct {
-	Timestamp time.Time
-	SrcIP     string
-	DstIP     string
-	SrcPort   string
-	DstPort   string
-	Protocol  string
-	Length    int
-	ISP       string
-	Service   string
-	Payload   string
+	Timestamp   time.Time
+	SrcIP       string
+	DstIP       string
+	SrcPort     string
+	DstPort     string
+	Protocol    string
+	Length      int
+	ISP         string
+	Service     string
+	Payload     string
 	ProcessName string
-	AIAnalysis string
+	PID         int32
+	AIAnalysis  string
 	IsMalicious bool
 	HTTPStatus  string
 	HTTPMethod  string
 }
 
 type ProcItem struct {
-	PID     int32
-	Name    string
-	BytesIn  uint64
-	BytesOut uint64
-	Packets []PacketData
+	PID         int32
+	Name        string
+	Category    string
+	BytesIn     uint64
+	BytesOut    uint64
+	Packets     []PacketData
 	IsMalicious bool
 }
 

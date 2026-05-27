@@ -16,6 +16,12 @@ Ligmashark uses local AI to explain packet payloads in plain English.
 - **Context Awareness**: The AI is tipped off about process names (e.g., Discord) to provide better context for UDP traffic.
 - **Exportable Reports**: Generate detailed technical reports for any packet, including AI summaries, network metadata, and full hex dumps for offline analysis.
 
+### 🔌 SharkScript Automation
+- **Accessible Logic**: A DuckyScript-inspired syntax designed to be understood by everyone, not just Go developers.
+- **Cross-Platform**: Unlike native plugins, SharkScript works seamlessly on both Linux and Windows.
+- **Compiled & Secure**: Source `.shark` files are compiled into proprietary `.ligma` bytecode for high-performance execution.
+- **Deep Integration**: Built-in support for conditional logic (IF/ELSE), loops, variables, math, and specialized network actions like HTTP POST, Redirect, and Spoofing.
+
 ### ⌨️ Navigation & Control
 - **Auto-scroll Management**: Toggle auto-scroll to freeze the viewport, allowing you to inspect specific sequences while capture continues in the background.
 - **Session Management**: Clear packet history and reset bandwidth counters for individual processes to start fresh analysis sessions.
@@ -29,6 +35,7 @@ Accessed by pressing `g`, this mode provides high-level visualization of your ne
 
 ### 🔌 Extensibility
 - **Plugin Support**: Load `.so` files at runtime to add custom alerting or logging logic.
+- **SharkScript**: Use the internal DSL for rapid automation and alerting.
 
 ### 🖥️ Platform Support
 

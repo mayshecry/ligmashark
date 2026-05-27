@@ -32,7 +32,7 @@ func StartMITM(iface string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get bettercap stdout: %w", err)
 	}
-	cmd.Stderr = cmd.Stdout // Capture all output
+	cmd.Stderr = cmd.Stdout
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start bettercap: %w (is it installed?)", err)

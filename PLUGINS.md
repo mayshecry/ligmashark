@@ -40,7 +40,6 @@ func (l LoggerPlugin) OnPacket(pkt *types.PacketData) {
 	}
 }
 
-// Exported symbol must be named 'Plugin'
 var Plugin LoggerPlugin
 ```
 
