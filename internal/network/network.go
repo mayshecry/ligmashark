@@ -71,6 +71,18 @@ func IsLocalIP(ip string) bool {
 	return strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") || strings.HasPrefix(ip, "172.1") || strings.HasPrefix(ip, "172.2") || strings.HasPrefix(ip, "172.3")
 }
 
+// IsHostIP returns true if the IP belongs to one of the local network interfaces.
+func IsHostIP(ip string) bool {
+	localIPsMu.RLock()
+	defer localIPsMu.RUnlock()
+	for _, lip := range localIPs {
+		if lip == ip {
+			return true
+		}
+	}
+	return ip == "127.0.0.1" || ip == "::1"
+}
+
 func GetISP(ip string, cache map[string]string) string {
 	if val, ok := cache[ip]; ok {
 		return val
@@ -144,15 +156,24 @@ func IdentifyService(procName, srcPort, dstPort string) string {
 	ports := []string{srcPort, dstPort}
 	for _, prt := range ports {
 		switch prt {
-		case "27015", "27016": return "Source Engine Game"
-		case "25565": return "Minecraft"
-		case "3074": return "Call of Duty"
-		case "7777", "7778": return "Game Server (UE/Terraria)"
-		case "3724": return "World of Warcraft"
-		case "5000", "5500": return "League of Legends"
-		case "3478", "3479": return "Voice Chat (Discord/Steam)"
-		case "28015": return "Rust"
-		case "2302": return "Arma/DayZ"
+		case "27015", "27016":
+			return "Source Engine Game"
+		case "25565":
+			return "Minecraft"
+		case "3074":
+			return "Call of Duty"
+		case "7777", "7778":
+			return "Game Server (UE/Terraria)"
+		case "3724":
+			return "World of Warcraft"
+		case "5000", "5500":
+			return "League of Legends"
+		case "3478", "3479":
+			return "Voice Chat (Discord/Steam)"
+		case "28015":
+			return "Rust"
+		case "2302":
+			return "Arma/DayZ"
 		}
 	}
 	return ""

@@ -50,6 +50,8 @@ func main() {
 		}
 	}
 
+	m.InterfaceName = captureDevice
+
 	handle, err := pcap.OpenLive(captureDevice, 1600, true, pcap.BlockForever)
 	if err != nil {
 		errStr := strings.ToLower(err.Error())
@@ -65,6 +67,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer handle.Close()
+	defer network.StopMITM()
 
 	go func() {
 		source := gopacket.NewPacketSource(handle, handle.LinkType())
@@ -127,65 +130,73 @@ func main() {
 					processes[pid].IsMalicious = true
 				}
 
-					pkt := types.PacketData{
-						Timestamp: time.Now(),
-						SrcIP:     srcIP,
-						DstIP:     dstIP,
-						SrcPort:   srcPort,
-						DstPort:   dstPort,
-						Protocol:  protocol,
-						Length:    len(packet.Data()),
-						ISP:       network.GetISP(remoteIP, ispCache),
-						Service:   network.IdentifyService(processes[pid].Name, srcPort, dstPort),
-						IsMalicious: isMalicious,
-					}
-					if appLayer := packet.ApplicationLayer(); appLayer != nil {
-						payload := appLayer.Payload()
-						pkt.Payload = hex.Dump(payload)
+				pkt := types.PacketData{
+					Timestamp:   time.Now(),
+					SrcIP:       srcIP,
+					DstIP:       dstIP,
+					SrcPort:     srcPort,
+					DstPort:     dstPort,
+					Protocol:    protocol,
+					Length:      len(packet.Data()),
+					ISP:         network.GetISP(remoteIP, ispCache),
+					Service:     network.IdentifyService(processes[pid].Name, srcPort, dstPort),
+					IsMalicious: isMalicious,
+				}
+				if appLayer := packet.ApplicationLayer(); appLayer != nil {
+					payload := appLayer.Payload()
+					pkt.Payload = hex.Dump(payload)
 
-						payloadStr := string(payload)
-						if strings.HasPrefix(payloadStr, "HTTP/") {
-							lines := strings.Split(payloadStr, "\r\n")
-							if len(lines) > 0 {
-								parts := strings.Split(lines[0], " ")
-								if len(parts) >= 2 {
-									pkt.HTTPStatus = parts[1]
-								}
-							}
-						} else if strings.HasPrefix(payloadStr, "GET") || strings.HasPrefix(payloadStr, "POST") || strings.HasPrefix(payloadStr, "PUT") {
-							parts := strings.Split(payloadStr, " ")
-							if len(parts) >= 1 {
-								pkt.HTTPMethod = parts[0]
+					payloadStr := string(payload)
+					if strings.HasPrefix(payloadStr, "HTTP/") {
+						lines := strings.Split(payloadStr, "\r\n")
+						if len(lines) > 0 {
+							parts := strings.Split(lines[0], " ")
+							if len(parts) >= 2 {
+								pkt.HTTPStatus = parts[1]
 							}
 						}
-					} else {
-						pkt.Payload = ""
+					} else if strings.HasPrefix(payloadStr, "GET") || strings.HasPrefix(payloadStr, "POST") || strings.HasPrefix(payloadStr, "PUT") {
+						parts := strings.Split(payloadStr, " ")
+						if len(parts) >= 1 {
+							pkt.HTTPMethod = parts[0]
+						}
 					}
-					if procItem, exists := processes[pid]; exists {
-						pkt.ProcessName = procItem.Name
-					}
+				} else {
+					pkt.Payload = ""
+				}
+				if procItem, exists := processes[pid]; exists {
+					pkt.ProcessName = procItem.Name
+				}
 
-					for _, p := range loadedPlugins {
-						p.OnPacket(&pkt)
-					}
+				for _, p := range loadedPlugins {
+					p.OnPacket(&pkt)
+				}
 
-					processes[pid].Packets = append(processes[pid].Packets, pkt)
-				
-					if strings.HasPrefix(srcIP, "192.") || strings.HasPrefix(srcIP, "10.") || srcIP == "127.0.0.1" {
-						processes[pid].BytesOut += uint64(pkt.Length)
-					} else {
-						processes[pid].BytesIn += uint64(pkt.Length)
+				if network.IsMITMActive() && !network.IsHostIP(srcIP) && !network.IsHostIP(dstIP) {
+					m.MITMPackets = append(m.MITMPackets, pkt)
+					if len(m.MITMPackets) > 1000 {
+						m.MITMPackets = m.MITMPackets[1:]
 					}
+				}
 
-					if len(processes[pid].Packets) > 1000 {
-						processes[pid].Packets = processes[pid].Packets[len(processes[pid].Packets)-1000:]
-					}
-					mu.Unlock()
+				processes[pid].Packets = append(processes[pid].Packets, pkt)
+
+				if strings.HasPrefix(srcIP, "192.") || strings.HasPrefix(srcIP, "10.") || srcIP == "127.0.0.1" {
+					processes[pid].BytesOut += uint64(pkt.Length)
+				} else {
+					processes[pid].BytesIn += uint64(pkt.Length)
+				}
+
+				if len(processes[pid].Packets) > 1000 {
+					processes[pid].Packets = processes[pid].Packets[len(processes[pid].Packets)-1000:]
+				}
+				mu.Unlock()
 			}
 		}
 	}()
 
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	m.Program = p
 
 	go m.SetupOllama(p)
 
