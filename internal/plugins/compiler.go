@@ -5,7 +5,6 @@ import (
 	"encoding/gob"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 )
 
@@ -17,25 +16,20 @@ func Compile(srcPath string) error {
 	}
 	defer src.Close()
 
-	var instructions []instruction
 	scanner := bufio.NewScanner(src)
 	lineNum := 0
-
-	var loopBuffer []instruction
-	inLoop := false
-	loopCount := 0
-
-	var funcBuffer []instruction
-	inFunc := false
-	currentFuncName := ""
-
-	var whileBuffer []instruction
-	inWhile := false
-	whileCond := ""
 
 	functions := make(map[string][]instruction)
 	imports := []string{}
 	lastWasIf := false
+
+	type control struct {
+		op   string
+		val  string
+		name string
+	}
+	stack := [][]instruction{{}}
+	ctrlStack := []control{}
 
 	for scanner.Scan() {
 		lineNum++
@@ -52,53 +46,41 @@ func Compile(srcPath string) error {
 		cmd := strings.ToUpper(parts[0])
 
 		if cmd == "LOOP" {
-			if inLoop {
-				return fmt.Errorf("line %d: nested loops are not yet supported", lineNum)
-			}
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: LOOP requires a count", lineNum)
 			}
-			count, err := strconv.Atoi(parts[1])
-			if err != nil {
-				return fmt.Errorf("line %d: invalid loop count", lineNum)
-			}
-			loopCount, inLoop, loopBuffer = count, true, []instruction{}
+			stack = append(stack, []instruction{})
+			ctrlStack = append(ctrlStack, control{op: "LOOP", val: parts[1]})
 			continue
 		}
 
 		if cmd == "ENDLOOP" {
-			if !inLoop {
+			if len(ctrlStack) == 0 || ctrlStack[len(ctrlStack)-1].op != "LOOP" {
 				return fmt.Errorf("line %d: ENDLOOP without LOOP", lineNum)
 			}
-
-			target := &instructions
-			if inFunc {
-				target = &funcBuffer
-			}
-
-			for i := 0; i < loopCount; i++ {
-				*target = append(*target, loopBuffer...)
-			}
-			inLoop = false
+			body := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			ctrl := ctrlStack[len(ctrlStack)-1]
+			ctrlStack = ctrlStack[:len(ctrlStack)-1]
+			stack[len(stack)-1] = append(stack[len(stack)-1], instruction{Op: "LOOP", Value: ctrl.val, Body: body})
 			continue
 		}
 
 		if cmd == "WHILE" {
-			if inWhile {
-				return fmt.Errorf("line %d: nested while loops not supported", lineNum)
-			}
-			whileCond = strings.Join(parts[1:], " ")
-			inWhile, whileBuffer = true, []instruction{}
+			stack = append(stack, []instruction{})
+			ctrlStack = append(ctrlStack, control{op: "WHILE", val: strings.Join(parts[1:], " ")})
 			continue
 		}
 
 		if cmd == "ENDWHILE" {
-			if !inWhile {
+			if len(ctrlStack) == 0 || ctrlStack[len(ctrlStack)-1].op != "WHILE" {
 				return fmt.Errorf("line %d: ENDWHILE without WHILE", lineNum)
 			}
-			ins := instruction{Op: "WHILE", Value: whileCond, Body: whileBuffer}
-			instructions = append(instructions, ins)
-			inWhile = false
+			body := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			ctrl := ctrlStack[len(ctrlStack)-1]
+			ctrlStack = ctrlStack[:len(ctrlStack)-1]
+			stack[len(stack)-1] = append(stack[len(stack)-1], instruction{Op: "WHILE", Value: ctrl.val, Body: body})
 			continue
 		}
 
@@ -106,19 +88,20 @@ func Compile(srcPath string) error {
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: FUNCTION requires a name", lineNum)
 			}
-			if inFunc {
-				return fmt.Errorf("line %d: nested functions not supported", lineNum)
-			}
-			currentFuncName, inFunc, funcBuffer = parts[1], true, []instruction{}
+			stack = append(stack, []instruction{})
+			ctrlStack = append(ctrlStack, control{op: "FUNCTION", name: parts[1]})
 			continue
 		}
 
 		if cmd == "ENDFUNCTION" {
-			if !inFunc {
+			if len(ctrlStack) == 0 || ctrlStack[len(ctrlStack)-1].op != "FUNCTION" {
 				return fmt.Errorf("line %d: ENDFUNCTION without FUNCTION", lineNum)
 			}
-			functions[currentFuncName] = funcBuffer
-			inFunc = false
+			body := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			ctrl := ctrlStack[len(ctrlStack)-1]
+			ctrlStack = ctrlStack[:len(ctrlStack)-1]
+			functions[ctrl.name] = body
 			continue
 		}
 
@@ -126,12 +109,24 @@ func Compile(srcPath string) error {
 		currentIsIf := false
 		switch cmd {
 		case "USE":
-			if len(parts) < 2 {
-				return fmt.Errorf("line %d: USE requires a path", lineNum)
-			}
 			path := strings.TrimSuffix(parts[1], ";")
 			imports = append(imports, path)
 			ins.Op, ins.Value = "USE", path
+		case "GET_ISP":
+			if len(parts) < 3 {
+				return fmt.Errorf("line %d: GET_ISP requires IP and variable", lineNum)
+			}
+			ins.Op, ins.Value, ins.Message = "GET_ISP", parts[1], parts[2]
+		case "SET_HEADER":
+			if len(parts) < 3 {
+				return fmt.Errorf("line %d: SET_HEADER requires key and value", lineNum)
+			}
+			ins.Op, ins.Value, ins.Message = "SET_HEADER", parts[1], strings.Join(parts[2:], " ")
+		case "GET_HEADER":
+			if len(parts) < 3 {
+				return fmt.Errorf("line %d: GET_HEADER requires key and variable", lineNum)
+			}
+			ins.Op, ins.Value, ins.Message = "GET_HEADER", parts[1], parts[2]
 		case "SET":
 			if len(parts) < 3 {
 				return fmt.Errorf("line %d: SET requires var and val", lineNum)
@@ -143,6 +138,11 @@ func Compile(srcPath string) error {
 			} else {
 				ins.Op, ins.Value, ins.Message = "SET", parts[1], strings.Join(parts[2:], " ")
 			}
+		case "TIME":
+			if len(parts) < 2 {
+				return fmt.Errorf("line %d: TIME requires a variable name", lineNum)
+			}
+			ins.Op, ins.Value = "TIME", parts[1]
 		case "INCREMENT":
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: INCREMENT requires a variable", lineNum)
@@ -191,11 +191,26 @@ func Compile(srcPath string) error {
 			ins.Value = parts[1]
 			ins.Message = strings.Join(parts[2:], " ")
 		case "HTTP":
-			if len(parts) < 4 || strings.ToUpper(parts[1]) != "POST" {
-				return fmt.Errorf("line %d: HTTP requires POST, URL and Body", lineNum)
+			if len(parts) < 3 {
+				return fmt.Errorf("line %d: HTTP requires method (GET/POST) and URL", lineNum)
 			}
-			ins.Op = "POST"
-			ins.Message = parts[2] + " " + strings.Join(parts[3:], " ")
+			method := strings.ToUpper(parts[1])
+			if method == "GET" {
+				if len(parts) < 4 {
+					return fmt.Errorf("line %d: HTTP GET requires URL and variable name", lineNum)
+				}
+				ins.Op, ins.Value, ins.Message = "HTTP_GET", parts[2], parts[3]
+			} else if method == "POST" {
+				if len(parts) < 4 {
+					return fmt.Errorf("line %d: HTTP POST requires URL and body", lineNum)
+				}
+				ins.Op, ins.Value = "HTTP_POST", parts[2]
+				if len(parts) > 4 {
+					ins.Message = strings.Join(parts[3:len(parts)-1], " ") + " | " + parts[len(parts)-1]
+				} else {
+					ins.Message = strings.Join(parts[3:], " ")
+				}
+			}
 		case "PRINT":
 			ins.Op, ins.Message = "PRINT", strings.Join(parts[1:], " ")
 		case "SLEEP":
@@ -222,7 +237,7 @@ func Compile(srcPath string) error {
 			} else if action == "HTTP" && len(parts) > 3 && strings.ToUpper(parts[2]) == "POST" {
 				ins.Op = "ELSE_POST"
 				ins.Message = parts[3] + " " + strings.Join(parts[4:], " ")
-			} else if action == "CALL" || action == "BLOCK" {
+			} else if action == "CALL" || action == "BLOCK" || action == "BREAK" {
 				if len(parts) > 2 {
 					ins.Value = parts[2]
 				}
@@ -244,7 +259,7 @@ func Compile(srcPath string) error {
 			actionIdx := -1
 			for i, p := range parts {
 				u := strings.ToUpper(p)
-				if u == "PRINT" || u == "CALL" || u == "BLOCK" || u == "EXEC" || u == "HTTP" {
+				if u == "PRINT" || u == "CALL" || u == "BLOCK" || u == "EXEC" || u == "HTTP" || u == "BREAK" {
 					actionIdx = i
 					break
 				}
@@ -271,23 +286,11 @@ func Compile(srcPath string) error {
 		}
 
 		lastWasIf = currentIsIf
-
-		if inFunc {
-			funcBuffer = append(funcBuffer, ins)
-		} else if inWhile {
-			whileBuffer = append(whileBuffer, ins)
-		} else if inLoop {
-			loopBuffer = append(loopBuffer, ins)
-		} else {
-			instructions = append(instructions, ins)
-		}
+		stack[len(stack)-1] = append(stack[len(stack)-1], ins)
 	}
 
-	if inLoop {
-		return fmt.Errorf("build error: unclosed LOOP block")
-	}
-	if inFunc {
-		return fmt.Errorf("build error: unclosed FUNCTION block: %s", currentFuncName)
+	if len(ctrlStack) > 0 {
+		return fmt.Errorf("build error: unclosed block %s", ctrlStack[len(ctrlStack)-1].op)
 	}
 
 	destPath := strings.TrimSuffix(srcPath, ".shark") + ".ligma"
@@ -301,7 +304,7 @@ func Compile(srcPath string) error {
 	dest.Write([]byte("LIGMA01"))
 
 	script := CompiledScript{
-		Main:      instructions,
+		Main:      stack[0],
 		Functions: functions,
 		Imports:   imports,
 	}

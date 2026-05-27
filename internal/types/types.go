@@ -20,6 +20,7 @@ type PacketData struct {
 	PID         int32
 	AIAnalysis  string
 	IsMalicious bool
+	HTTPHeaders map[string]string
 	HTTPStatus  string
 	HTTPMethod  string
 }

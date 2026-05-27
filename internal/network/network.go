@@ -96,6 +96,10 @@ func GetISP(ip string, cache map[string]string) string {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "API Rate Limited"
+	}
+
 	var r struct {
 		Isp string `json:"isp"`
 	}

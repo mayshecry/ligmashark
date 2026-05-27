@@ -309,6 +309,27 @@ CALL greet
 
 # 🌐 Networking
 
+## GET_ISP
+Fetch ISP information for an IP address.
+```shark
+GET_ISP %SRC_IP% my_isp
+PRINT "Source ISP: %my_isp%"
+```
+
+## SET_HEADER / GET_HEADER
+Set outgoing headers or fetch headers from the current packet.
+```shark
+SET_HEADER User-Agent "Ligmashark-Bot"
+GET_HEADER Server server_type
+PRINT "Remote Server: %server_type%"
+```
+
+```shark
+IF CONTAINS "admin" PRINT "Packet contains sensitive string!"
+IF PROTO TCP AND CONTAINS "GET" PRINT "HTTP GET Request detected"
+```
+
+---
 ## HTTP POST
 
 Send an HTTP POST request.
@@ -693,7 +714,7 @@ PRINT Plugin loaded
 
 LOOP 3
 PRINT Monitoring traffic...
-ENDLOOP
+ENDLOOPaa
 
 IF malicious CALL notify
 ELSE PRINT Traffic clean

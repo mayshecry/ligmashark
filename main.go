@@ -170,6 +170,25 @@ func main() {
 					IsMalicious: isMalicious,
 					PID:         pid,
 				}
+
+				if protocol == "TCP" && (dstPort == "80" || dstPort == "8080" || srcPort == "80" || srcPort == "8080") {
+					if appLayer := packet.ApplicationLayer(); appLayer != nil {
+						pStr := string(appLayer.Payload())
+						if strings.Contains(pStr, "HTTP/") || strings.HasPrefix(pStr, "GET") || strings.HasPrefix(pStr, "POST") {
+							pkt.HTTPHeaders = make(map[string]string)
+							lines := strings.Split(pStr, "\r\n")
+							for _, l := range lines[1:] {
+								if l == "" {
+									break
+								}
+								if h := strings.SplitN(l, ": ", 2); len(h) == 2 {
+									pkt.HTTPHeaders[h[0]] = h[1]
+								}
+							}
+						}
+					}
+				}
+
 				if appLayer := packet.ApplicationLayer(); appLayer != nil {
 					payload := appLayer.Payload()
 					pkt.Payload = hex.Dump(payload)

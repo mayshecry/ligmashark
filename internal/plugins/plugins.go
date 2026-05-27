@@ -36,6 +36,8 @@ type ScriptPlugin struct {
 	Instructions []instruction
 	Functions    map[string][]instruction
 	imports      map[string]bool
+	headers      map[string]string
+	ispCache     map[string]string
 	vars         map[string]string
 }
 
@@ -50,6 +52,12 @@ func (s *ScriptPlugin) OnPacket(pkt *types.PacketData) {
 	if s.imports == nil {
 		s.imports = make(map[string]bool)
 	}
+	if s.headers == nil {
+		s.headers = make(map[string]string)
+	}
+	if s.ispCache == nil {
+		s.ispCache = make(map[string]string)
+	}
 
 	s.vars["SRC_IP"] = pkt.SrcIP
 	s.vars["DST_IP"] = pkt.DstIP
@@ -57,15 +65,17 @@ func (s *ScriptPlugin) OnPacket(pkt *types.PacketData) {
 	s.vars["PROCESS"] = pkt.ProcessName
 	s.vars["PID"] = fmt.Sprintf("%d", pkt.PID)
 
-	s.execute(s.Instructions, pkt)
+	_ = s.execute(s.Instructions, pkt)
 }
 
-func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) {
+func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool {
 	lastIfMet := false
 	for _, ins := range insts {
 		if strings.ToUpper(ins.Op) == "WHILE" {
 			for s.evalLogic(ins.Value, pkt) {
-				s.execute(ins.Body, pkt)
+				if s.execute(ins.Body, pkt) {
+					break
+				}
 				time.Sleep(1 * time.Millisecond)
 			}
 			continue
@@ -81,12 +91,29 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) {
 			s.vars[ins.Value] = msg
 		case "SET_EXPR":
 			s.vars[ins.Value] = s.evalMath(msg)
+		case "SET_HEADER":
+			s.headers[val] = msg
+		case "GET_HEADER":
+			s.vars[msg] = pkt.HTTPHeaders[val]
+		case "GET_ISP":
+			s.vars[msg] = network.GetISP(val, s.ispCache)
+		case "TIME":
+			s.vars[val] = strconv.FormatInt(time.Now().UnixMilli(), 10)
+		case "BREAK":
+			return true
 		case "INCREMENT":
 			curr := s.vars[val]
 			if curr == "" {
 				curr = "0"
 			}
 			s.vars[val] = s.evalMath(curr + "+1")
+		case "LOOP":
+			count, _ := strconv.Atoi(s.expandVars(ins.Value))
+			for i := 0; i < count; i++ {
+				if s.execute(ins.Body, pkt) {
+					break
+				}
+			}
 		case "BASED":
 			fmt.Printf("[%s] 🗿 BASED: %s\n", s.Name(), msg)
 		case "SLOP":
@@ -145,10 +172,12 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) {
 					http.Post(u, "application/json", strings.NewReader(b))
 				}(url, body)
 			}
-		case "IF_COMPLEX":
+		case "IF_COMPLEX", "IF_COMPLEX_PRINT", "IF_COMPLEX_CALL", "IF_COMPLEX_BLOCK", "IF_COMPLEX_EXEC", "IF_COMPLEX_POST", "IF_COMPLEX_BREAK":
 			if s.evalLogic(val, pkt) {
 				lastIfMet = true
-				s.handleAction(ins.Op, ins.Message, ins.Value, pkt)
+				if s.handleAction(ins.Op, ins.Message, ins.Value, pkt) {
+					return true
+				}
 			} else {
 				lastIfMet = false
 			}
@@ -158,7 +187,9 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) {
 			}
 		case "CALL":
 			if f, ok := s.Functions[val]; ok {
-				s.execute(f, pkt)
+				if s.execute(f, pkt) {
+					return true
+				}
 			}
 		case "PRINT":
 			fmt.Printf("[%s] %s\n", s.Name(), msg)
@@ -191,7 +222,9 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) {
 			if s.evalExtCondition(val, pkt) {
 				lastIfMet = true
 				if f, ok := s.Functions[ins.Message]; ok {
-					s.execute(f, pkt)
+					if s.execute(f, pkt) {
+						return true
+					}
 				}
 			} else {
 				lastIfMet = false
@@ -200,14 +233,18 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) {
 			if pkt.IsMalicious {
 				lastIfMet = true
 				if f, ok := s.Functions[val]; ok {
-					s.execute(f, pkt)
+					if s.execute(f, pkt) {
+						return true
+					}
 				}
 			} else {
 				lastIfMet = false
 			}
 		case "ELSE":
 			if !lastIfMet {
-				s.handleElseAction(ins, pkt)
+				if s.handleElseAction(ins, pkt) {
+					return true
+				}
 			}
 		case "BLOCK":
 			s.killProcess(pkt)
@@ -220,18 +257,21 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) {
 			}
 		}
 	}
+	return false
 }
 
-func (s *ScriptPlugin) handleAction(op, message, value string, pkt *types.PacketData) {
+func (s *ScriptPlugin) handleAction(op, message, value string, pkt *types.PacketData) bool {
 	msg := s.expandVars(message)
 	if strings.HasPrefix(op, "IF_COMPLEX_") {
 		action := strings.TrimPrefix(op, "IF_COMPLEX_")
 		switch action {
+		case "BREAK":
+			return true
 		case "PRINT":
 			fmt.Printf("[%s] %s\n", s.Name(), msg)
 		case "CALL":
 			if f, ok := s.Functions[message]; ok {
-				s.execute(f, pkt)
+				return s.execute(f, pkt)
 			}
 		case "BLOCK":
 			s.killProcess(pkt)
@@ -244,8 +284,17 @@ func (s *ScriptPlugin) handleAction(op, message, value string, pkt *types.Packet
 			}
 			go cmd.Run()
 			fmt.Printf("[%s] 🚀 EXEC: %s\n", s.Name(), msg)
+		case "POST":
+			parts := strings.SplitN(msg, " ", 2)
+			if len(parts) == 2 {
+				url, body := parts[0], parts[1]
+				go func(u, b string) {
+					http.Post(u, "application/json", strings.NewReader(b))
+				}(url, body)
+			}
 		}
 	}
+	return false
 }
 
 func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
@@ -276,6 +325,10 @@ func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
 	if strings.HasPrefix(cond, "PROTO ") {
 		return strings.EqualFold(pkt.Protocol, strings.Fields(expr)[1])
 	}
+	if strings.HasPrefix(cond, "CONTAINS ") {
+		searchStr := strings.Trim(expr[9:], "\" ")
+		return strings.Contains(pkt.Payload, searchStr)
+	}
 	if strings.Contains(expr, ".") {
 		return s.evalExtCondition(expr, pkt)
 	}
@@ -283,7 +336,7 @@ func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
 	return false
 }
 
-func (s *ScriptPlugin) handleElseAction(ins instruction, pkt *types.PacketData) {
+func (s *ScriptPlugin) handleElseAction(ins instruction, pkt *types.PacketData) bool {
 	msg := s.expandVars(ins.Message)
 	val := s.expandVars(ins.Value)
 	switch strings.ToUpper(ins.Op) {
@@ -291,7 +344,7 @@ func (s *ScriptPlugin) handleElseAction(ins instruction, pkt *types.PacketData) 
 		fmt.Printf("[%s] %s\n", s.Name(), msg)
 	case "ELSE_CALL":
 		if f, ok := s.Functions[val]; ok {
-			s.execute(f, pkt)
+			return s.execute(f, pkt)
 		}
 	case "ELSE_BLOCK":
 		s.killProcess(pkt)
@@ -304,6 +357,7 @@ func (s *ScriptPlugin) handleElseAction(ins instruction, pkt *types.PacketData) 
 			}(url, body)
 		}
 	}
+	return false
 }
 
 func (s *ScriptPlugin) evalExtCondition(cond string, pkt *types.PacketData) bool {
@@ -425,6 +479,9 @@ func LoadPlugins(dir string) ([]types.Plugin, error) {
 				Instructions: script.Main,
 				Functions:    script.Functions,
 				imports:      make(map[string]bool),
+				vars:         make(map[string]string),
+				headers:      make(map[string]string),
+				ispCache:     make(map[string]string),
 			})
 			for _, imp := range script.Imports {
 				loadedPlugins[len(loadedPlugins)-1].(*ScriptPlugin).imports[imp] = true
@@ -492,6 +549,9 @@ func LoadPluginsFromFile(path string) ([]types.Plugin, error) {
 		Instructions: script.Main,
 		Functions:    script.Functions,
 		imports:      make(map[string]bool),
+		vars:         make(map[string]string),
+		headers:      make(map[string]string),
+		ispCache:     make(map[string]string),
 	}
 
 	for _, imp := range script.Imports {
