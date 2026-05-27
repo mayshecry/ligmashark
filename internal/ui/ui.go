@@ -1321,7 +1321,7 @@ Go Version: %s
 
 func (m *Model) renderBettercapMode() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("160")).Padding(0, 1).Background(lipgloss.Color("235"))
-	title := titleStyle.Render(" 🔥 BETTERCAP MITM DASHBOARD ")
+	title := titleStyle.Render(" Ligmashark MITM (Powered by Bettercap) ")
 
 	statusColor := "241"
 	statusText := "INACTIVE"
