@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"ligmashark/internal/network"
@@ -91,6 +92,7 @@ type ScriptPlugin struct {
 	headers      map[string]string
 	vars         map[string]string
 	timerStart   time.Time
+	mu           sync.RWMutex
 }
 
 func (s *ScriptPlugin) Name() string {
@@ -98,6 +100,7 @@ func (s *ScriptPlugin) Name() string {
 }
 
 func (s *ScriptPlugin) OnPacket(pkt *types.PacketData) {
+	s.mu.Lock()
 	if s.vars == nil {
 		s.vars = make(map[string]string)
 	}
@@ -113,6 +116,7 @@ func (s *ScriptPlugin) OnPacket(pkt *types.PacketData) {
 	s.vars["PROTO"] = pkt.Protocol
 	s.vars["PROCESS"] = pkt.ProcessName
 	s.vars["PID"] = fmt.Sprintf("%d", pkt.PID)
+	s.mu.Unlock()
 
 	_ = s.execute(s.Instructions, pkt)
 }
@@ -131,39 +135,72 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 
 		switch ins.Op {
 		case OpUse:
+			s.mu.Lock()
 			s.imports[ins.Value] = true
+			s.mu.Unlock()
 		case OpTimerStart:
+			s.mu.Lock()
 			s.timerStart = time.Now()
+			s.mu.Unlock()
 		case OpTimerEnd:
-			s.vars[ins.Value] = strconv.FormatFloat(time.Since(s.timerStart).Seconds(), 'f', 4, 64)
+			s.mu.RLock()
+			duration := time.Since(s.timerStart).Seconds()
+			s.mu.RUnlock()
+			s.mu.Lock()
+			s.vars[ins.Value] = strconv.FormatFloat(duration, 'f', 4, 64)
+			s.mu.Unlock()
 		case OpSet:
-			s.vars[ins.Value] = s.expandVars(ins.Message)
+			val := s.expandVars(ins.Message)
+			s.mu.Lock()
+			s.vars[ins.Value] = val
+			s.mu.Unlock()
 		case OpSetExpr:
-			s.vars[ins.Value] = s.evalMath(s.expandVars(ins.Message))
+			val := s.evalMath(s.expandVars(ins.Message))
+			s.mu.Lock()
+			s.vars[ins.Value] = val
+			s.mu.Unlock()
 		case OpSetHeader:
-			s.headers[s.expandVars(ins.Value)] = s.expandVars(ins.Message)
+			key, val := s.expandVars(ins.Value), s.expandVars(ins.Message)
+			s.mu.Lock()
+			s.headers[key] = val
+			s.mu.Unlock()
 		case OpGetHeader:
-			s.vars[ins.Message] = pkt.HTTPHeaders[s.expandVars(ins.Value)]
+			key := s.expandVars(ins.Value)
+			s.mu.Lock()
+			s.vars[ins.Message] = pkt.HTTPHeaders[key]
+			s.mu.Unlock()
 		case OpGetISP:
-			s.vars[ins.Message] = network.GetISP(s.expandVars(ins.Value))
+			ip := s.expandVars(ins.Value)
+			isp := network.GetISP(ip)
+			s.mu.Lock()
+			s.vars[ins.Message] = isp
+			s.mu.Unlock()
 		case OpTime:
+			s.mu.Lock()
 			s.vars[ins.Value] = strconv.FormatInt(time.Now().UnixMilli(), 10)
+			s.mu.Unlock()
 		case OpBreak:
 			return true
 		case OpIncrement:
+			s.mu.Lock()
 			curr := s.vars[ins.Value]
 			if curr == "" {
 				curr = "0"
 			}
 			iv, _ := strconv.Atoi(curr)
 			s.vars[ins.Value] = strconv.Itoa(iv + 1)
+			s.mu.Unlock()
 		case OpLoop:
 			count, _ := strconv.Atoi(s.expandVars(ins.Value))
+			var wg sync.WaitGroup
 			for i := 0; i < count; i++ {
-				if s.execute(ins.Body, pkt) {
-					break
-				}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					s.execute(ins.Body, pkt)
+				}()
 			}
+			wg.Wait()
 		case OpBased:
 			fmt.Printf("[%s] 🗿 BASED: %s\n", s.Name(), s.expandVars(ins.Message))
 		case OpSlop:
@@ -215,7 +252,9 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			fmt.Printf("[%s] %s", s.Name(), s.expandVars(ins.Message))
 			var inputVal string
 			fmt.Scanln(&inputVal)
+			s.mu.Lock()
 			s.vars[ins.Value] = strings.TrimSpace(inputVal)
+			s.mu.Unlock()
 		case OpPost:
 			parts := strings.SplitN(s.expandVars(ins.Message), " ", 2)
 			if len(parts) == 2 {
@@ -225,14 +264,12 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 					if err != nil || req == nil {
 						return
 					}
-					headers := make(map[string]string)
-					for k, v := range h {
-						headers[k] = v
-					}
-					req.Header.Set("Content-Type", "application/json")
+					s.mu.RLock()
 					for k, v := range h {
 						req.Header.Set(k, v)
 					}
+					s.mu.RUnlock()
+					req.Header.Set("Content-Type", "application/json")
 					resp, err := http.DefaultClient.Do(req)
 					if err == nil {
 						resp.Body.Close()
@@ -453,7 +490,7 @@ func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
 
 func (s *ScriptPlugin) handleElseAction(ins instruction, pkt *types.PacketData) bool {
 	msg := s.expandVars(ins.Message)
-	switch ins.Value { // For ELSE, Value contains the specific action sub-type
+	switch ins.Value {
 	case "ELSE_PRINT":
 		fmt.Printf("[%s] %s\n", s.Name(), msg)
 	case "ELSE_CALL":
@@ -466,20 +503,22 @@ func (s *ScriptPlugin) handleElseAction(ins instruction, pkt *types.PacketData) 
 		parts := strings.SplitN(msg, " ", 2)
 		if len(parts) == 2 {
 			url, body := parts[0], parts[1]
-			go func(u, b string, h map[string]string) {
+			go func(u, b string) {
 				req, err := http.NewRequest("POST", u, strings.NewReader(b))
 				if err != nil || req == nil {
 					return
 				}
 				req.Header.Set("Content-Type", "application/json")
-				for k, v := range h {
+				s.mu.RLock()
+				for k, v := range s.headers {
 					req.Header.Set(k, v)
 				}
+				s.mu.RUnlock()
 				resp, err := http.DefaultClient.Do(req)
 				if err == nil {
 					resp.Body.Close()
 				}
-			}(url, body, s.headers)
+			}(url, body)
 		}
 	}
 	return false
@@ -494,6 +533,8 @@ func (s *ScriptPlugin) evalExtCondition(cond string, pkt *types.PacketData) bool
 	pkg := parts[0]
 	funcCall := parts[1]
 
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if !s.imports["ligmashark/"+pkg] {
 		return false
 	}
@@ -573,6 +614,8 @@ func (s *ScriptPlugin) expandVars(input string) string {
 		return input
 	}
 
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var sb strings.Builder
 	sb.Grow(len(input) + 16)
 
