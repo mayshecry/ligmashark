@@ -453,7 +453,6 @@ func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
 
 func (s *ScriptPlugin) handleElseAction(ins instruction, pkt *types.PacketData) bool {
 	msg := s.expandVars(ins.Message)
-	val := s.expandVars(ins.Value)
 	switch ins.Value { // For ELSE, Value contains the specific action sub-type
 	case "ELSE_PRINT":
 		fmt.Printf("[%s] %s\n", s.Name(), msg)
