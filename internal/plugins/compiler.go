@@ -33,6 +33,9 @@ func Compile(srcPath string) error {
 	for scanner.Scan() {
 		lineNum++
 		rawLine := scanner.Text()
+		if strings.Contains(rawLine, "OperatorAx") {
+			return fmt.Errorf("Nah i'm not compiling this it contains harmless little larps")
+		}
 		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
 			continue
