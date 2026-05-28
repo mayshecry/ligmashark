@@ -67,9 +67,9 @@ func (s *ScriptPlugin) OnPacket(pkt *types.PacketData) {
 func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool {
 	lastIfMet := false
 	for _, ins := range insts {
-		op := ins.Op // Already uppercased by compiler
+		op := ins.Op
 		if op == "WHILE" {
-			for s.evalLogic(ins.Value, pkt) {
+			for s.evalLogic(s.expandVars(ins.Value), pkt) {
 				if s.execute(ins.Body, pkt) {
 					break
 				}
@@ -77,37 +77,34 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			continue
 		}
 
-		msg := s.expandVars(ins.Message)
-		val := s.expandVars(ins.Value)
-
 		switch op {
 		case "USE":
-			s.imports[val] = true
+			s.imports[ins.Value] = true
 		case "TIMER_START":
 			s.timerStart = time.Now()
 		case "TIMER_END":
 			s.vars[ins.Value] = strconv.FormatFloat(time.Since(s.timerStart).Seconds(), 'f', 4, 64)
 		case "SET":
-			s.vars[ins.Value] = msg
+			s.vars[ins.Value] = s.expandVars(ins.Message)
 		case "SET_EXPR":
-			s.vars[ins.Value] = s.evalMath(msg)
+			s.vars[ins.Value] = s.evalMath(s.expandVars(ins.Message))
 		case "SET_HEADER":
-			s.headers[val] = msg
+			s.headers[s.expandVars(ins.Value)] = s.expandVars(ins.Message)
 		case "GET_HEADER":
-			s.vars[msg] = pkt.HTTPHeaders[val]
+			s.vars[ins.Message] = pkt.HTTPHeaders[s.expandVars(ins.Value)]
 		case "GET_ISP":
-			s.vars[msg] = network.GetISP(val)
+			s.vars[ins.Message] = network.GetISP(s.expandVars(ins.Value))
 		case "TIME":
-			s.vars[val] = strconv.FormatInt(time.Now().UnixMilli(), 10)
+			s.vars[ins.Value] = strconv.FormatInt(time.Now().UnixMilli(), 10)
 		case "BREAK":
 			return true
 		case "INCREMENT":
-			curr := s.vars[val]
+			curr := s.vars[ins.Value]
 			if curr == "" {
 				curr = "0"
 			}
 			iv, _ := strconv.Atoi(curr)
-			s.vars[val] = strconv.Itoa(iv + 1)
+			s.vars[ins.Value] = strconv.Itoa(iv + 1)
 		case "LOOP":
 			count, _ := strconv.Atoi(s.expandVars(ins.Value))
 			for i := 0; i < count; i++ {
@@ -116,13 +113,13 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 				}
 			}
 		case "BASED":
-			fmt.Printf("[%s] 🗿 BASED: %s\n", s.Name(), msg)
+			fmt.Printf("[%s] 🗿 BASED: %s\n", s.Name(), s.expandVars(ins.Message))
 		case "SLOP":
-			fmt.Printf("[%s] 🤮 SLOP DETECTED: %s\n", s.Name(), msg)
+			fmt.Printf("[%s] 🤮 SLOP DETECTED: %s\n", s.Name(), s.expandVars(ins.Message))
 		case "TELEMETRY_DETECTED":
-			fmt.Printf("[%s] 📡 TELEMETRY DETECTED: %s\n", s.Name(), msg)
+			fmt.Printf("[%s] 📡 TELEMETRY DETECTED: %s\n", s.Name(), s.expandVars(ins.Message))
 		case "HATE":
-			fmt.Printf("[%s] 💢 HATE: %s\n", s.Name(), strings.ToUpper(msg))
+			fmt.Printf("[%s] 💢 HATE: %s\n", s.Name(), strings.ToUpper(s.expandVars(ins.Message)))
 		case "REJECT_MICROSOFT":
 			if strings.Contains(strings.ToLower(pkt.ISP), "microsoft") {
 				s.killProcess(pkt)
@@ -137,36 +134,38 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			s.killProcess(pkt)
 			fmt.Printf("[%s] ☢️  NUKED connection from %s\n", s.Name(), pkt.ProcessName)
 		case "DROP_ALL_PACKETS":
-			// Mark for the session that we are "dropping" traffic (simulation)
 			fmt.Printf("[%s] 🚮 DROPPING packet from %s (Internal State Only)\n", s.Name(), pkt.SrcIP)
 		case "REDIRECT":
-			if v, err := strconv.Atoi(val); err == nil {
+			expandedVal := s.expandVars(ins.Value)
+			if v, err := strconv.Atoi(expandedVal); err == nil {
 				pkt.DstPort = strconv.Itoa(v)
-				fmt.Printf("[%s] 🔄 REDIRECTED to port %s\n", s.Name(), val)
+				fmt.Printf("[%s] 🔄 REDIRECTED to port %s\n", s.Name(), expandedVal)
 			}
 		case "SPOOF":
-			pkt.SrcIP = val
-			fmt.Printf("[%s] 🎭 SPOOFED Source IP to %s\n", s.Name(), val)
+			expandedVal := s.expandVars(ins.Value)
+			pkt.SrcIP = expandedVal
+			fmt.Printf("[%s] 🎭 SPOOFED Source IP to %s\n", s.Name(), expandedVal)
 		case "ALERT":
 			alertStyle := "\033[1;31m" // Bold Red
 			reset := "\033[0m"
-			fmt.Printf("[%s] %s🚨 ALERT: %s%s\n", s.Name(), alertStyle, msg, reset)
+			fmt.Printf("[%s] %s🚨 ALERT: %s%s\n", s.Name(), alertStyle, s.expandVars(ins.Message), reset)
 		case "EXEC":
+			expandedMsg := s.expandVars(ins.Message)
 			var cmd *exec.Cmd
 			if runtime.GOOS == "windows" {
-				cmd = exec.Command("cmd", "/C", msg)
+				cmd = exec.Command("cmd", "/C", expandedMsg)
 			} else {
-				cmd = exec.Command("sh", "-c", msg)
+				cmd = exec.Command("sh", "-c", expandedMsg)
 			}
 			go cmd.Run()
-			fmt.Printf("[%s] 🚀 EXEC: %s\n", s.Name(), msg)
+			fmt.Printf("[%s] 🚀 EXEC: %s\n", s.Name(), expandedMsg)
 		case "INPUT":
-			fmt.Printf("[%s] %s", s.Name(), msg)
+			fmt.Printf("[%s] %s", s.Name(), s.expandVars(ins.Message))
 			var inputVal string
 			fmt.Scanln(&inputVal)
 			s.vars[ins.Value] = strings.TrimSpace(inputVal)
 		case "POST":
-			parts := strings.SplitN(msg, " ", 2)
+			parts := strings.SplitN(s.expandVars(ins.Message), " ", 2)
 			if len(parts) == 2 {
 				url, body := parts[0], parts[1]
 				go func(u, b string, h map[string]string) {
@@ -189,7 +188,7 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 				}(url, body, s.headers)
 			}
 		case "IF_COMPLEX", "IF_COMPLEX_PRINT", "IF_COMPLEX_CALL", "IF_COMPLEX_BLOCK", "IF_COMPLEX_EXEC", "IF_COMPLEX_POST", "IF_COMPLEX_BREAK":
-			if s.evalLogic(val, pkt) {
+			if s.evalLogic(s.expandVars(ins.Value), pkt) {
 				lastIfMet = true
 				if s.handleAction(ins.Op, ins.Message, ins.Value, pkt) {
 					return true
@@ -198,25 +197,25 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 				lastIfMet = false
 			}
 		case "SLEEP":
-			if ms, err := strconv.Atoi(val); err == nil {
+			if ms, err := strconv.Atoi(s.expandVars(ins.Value)); err == nil {
 				time.Sleep(time.Duration(ms) * time.Millisecond)
 			}
 		case "CALL":
-			if f, ok := s.Functions[val]; ok {
+			if f, ok := s.Functions[ins.Value]; ok {
 				if s.execute(f, pkt) {
 					return true
 				}
 			}
 		case "PRINT":
-			fmt.Printf("[%s] %s\n", s.Name(), msg)
+			fmt.Printf("[%s] %s\n", s.Name(), s.expandVars(ins.Message))
 		case "LOG":
-			s.logToFile(msg)
+			s.logToFile(s.expandVars(ins.Message))
 		case "FETCH":
-			go http.Get(val)
+			go http.Get(s.expandVars(ins.Value))
 		case "IF_MALICIOUS":
 			if pkt.IsMalicious {
 				lastIfMet = true
-				fmt.Printf("[%s] ALERT: %s (Target: %s)\n", s.Name(), msg, pkt.DstIP)
+				fmt.Printf("[%s] ALERT: %s (Target: %s)\n", s.Name(), s.expandVars(ins.Message), pkt.DstIP)
 			} else {
 				lastIfMet = false
 			}
@@ -237,7 +236,7 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 		case "IF_EXT_CALL":
 			if s.evalExtCondition(val, pkt) {
 				lastIfMet = true
-				if f, ok := s.Functions[ins.Message]; ok {
+				if f, ok := s.Functions[val]; ok {
 					if s.execute(f, pkt) {
 						return true
 					}
@@ -248,7 +247,7 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 		case "IF_MALICIOUS_CALL":
 			if pkt.IsMalicious {
 				lastIfMet = true
-				if f, ok := s.Functions[val]; ok {
+				if f, ok := s.Functions[ins.Value]; ok {
 					if s.execute(f, pkt) {
 						return true
 					}
@@ -325,10 +324,6 @@ func (s *ScriptPlugin) handleAction(op, message, value string, pkt *types.Packet
 }
 
 func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
-	expr = s.expandVars(expr)
-
-	// 1. Handle OR conditions first (short-circuiting)
-	// Check for presence first to avoid Split allocation if not present
 	if strings.Contains(expr, " OR ") {
 		orParts := strings.Split(expr, " OR ")
 		if len(orParts) > 1 {
@@ -341,8 +336,6 @@ func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
 		}
 	}
 
-	// 2. Handle AND conditions (short-circuiting)
-	// Check for presence first to avoid Split allocation if not present
 	if strings.Contains(expr, " AND ") {
 		andParts := strings.Split(expr, " AND ")
 		if len(andParts) > 1 {
@@ -355,11 +348,9 @@ func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
 		}
 	}
 
-	// 3. Handle simple numeric comparisons (most common in loops)
-	// Use strings.Index and slicing instead of Split for fewer allocations
 	if idx := strings.Index(expr, " < "); idx != -1 {
 		leftStr := strings.TrimSpace(expr[:idx])
-		rightStr := strings.TrimSpace(expr[idx+3:]) // " < " is 3 chars
+		rightStr := strings.TrimSpace(expr[idx+3:])
 		left, err1 := strconv.Atoi(leftStr)
 		right, err2 := strconv.Atoi(rightStr)
 		return err1 == nil && err2 == nil && left < right
@@ -372,20 +363,17 @@ func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
 		return err1 == nil && err2 == nil && left > right
 	}
 
-	// 4. Handle MALICIOUS (case-insensitive)
 	if strings.EqualFold(expr, "MALICIOUS") {
 		return pkt.IsMalicious
 	}
 
-	// 5. Handle other conditions that might require prefix checks
-	// Only perform ToUpper on the prefix if needed, to avoid full string allocation
-	if len(expr) >= 6 && strings.ToUpper(expr[:6]) == "PROTO " {
+	if strings.HasPrefix(strings.ToUpper(expr), "PROTO ") {
 		f := strings.Fields(expr)
 		if len(f) > 1 {
 			return strings.EqualFold(pkt.Protocol, f[1])
 		}
 	}
-	if len(expr) >= 9 && strings.ToUpper(expr[:9]) == "CONTAINS " {
+	if strings.HasPrefix(strings.ToUpper(expr), "CONTAINS ") {
 		searchStr := strings.Trim(expr[9:], "\" ")
 		return strings.Contains(hex.Dump(pkt.Payload), searchStr)
 	}
@@ -515,15 +503,39 @@ func (s *ScriptPlugin) evalMath(expr string) string {
 }
 
 func (s *ScriptPlugin) expandVars(input string) string {
-	if !strings.Contains(input, "%") {
+	idx := strings.IndexByte(input, '%')
+	if idx == -1 {
 		return input
 	}
-	output := input
-	for k, v := range s.vars {
-		placeholder := "%" + k + "%"
-		output = strings.ReplaceAll(output, placeholder, v)
+
+	var sb strings.Builder
+	sb.Grow(len(input) + 16)
+
+	for {
+		idx = strings.IndexByte(input, '%')
+		if idx == -1 {
+			sb.WriteString(input)
+			break
+		}
+		sb.WriteString(input[:idx])
+		input = input[idx+1:]
+
+		end := strings.IndexByte(input, '%')
+		if end == -1 {
+			sb.WriteByte('%')
+			sb.WriteString(input)
+			break
+		}
+
+		key := input[:end]
+		if val, ok := s.vars[key]; ok {
+			sb.WriteString(val)
+		} else {
+			sb.WriteString("%" + key + "%")
+		}
+		input = input[end+1:]
 	}
-	return output
+	return sb.String()
 }
 
 func LoadPlugins(dir string) ([]types.Plugin, error) {
