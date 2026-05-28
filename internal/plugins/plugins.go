@@ -73,17 +73,46 @@ const (
 	OpParallelLoop
 )
 
+type LogicOp uint8
+
+const (
+	LogNop LogicOp = iota
+	LogOr
+	LogAnd
+	LogLt
+	LogGt
+	LogEq
+	LogContains
+	LogProto
+	LogMalicious
+	LogExt
+	LogVar
+	LogConst
+)
+
+type LogicExpr struct {
+	Op    LogicOp
+	Left  *LogicExpr
+	Right *LogicExpr
+	Value string
+	Int   int
+}
+
 type instruction struct {
-	Op      OpCode
-	Value   string
-	Message string
-	Body    []instruction
+	Op        OpCode
+	Value     string
+	Message   string
+	Body      []instruction
+	Condition *LogicExpr // Pre-compiled logic evaluation tree
+	IntValue  int
+	IsStatic  bool
 }
 
 type CompiledScript struct {
 	Main      []instruction
 	Functions map[string][]instruction
 	Imports   []string
+	Symbols   []string // Variable name mapping
 }
 type ScriptPlugin struct {
 	Filename     string
@@ -126,7 +155,7 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 	lastIfMet := false
 	for _, ins := range insts {
 		if ins.Op == OpWhile {
-			for s.evalLogic(s.expandVars(ins.Value), pkt) {
+			for s.evalLogic(ins.Condition, pkt) {
 				if s.execute(ins.Body, pkt) {
 					break
 				}
@@ -184,29 +213,47 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			return true
 		case OpIncrement:
 			s.mu.Lock()
-			curr := s.vars[ins.Value]
-			if curr == "" {
+			curr, ok := s.vars[ins.Value]
+			if !ok || curr == "" {
 				curr = "0"
 			}
+			// Specialized Fast-path for integers
 			iv, _ := strconv.Atoi(curr)
 			s.vars[ins.Value] = strconv.Itoa(iv + 1)
 			s.mu.Unlock()
 		case OpLoop:
-			count, _ := strconv.Atoi(s.expandVars(ins.Value))
+			count := ins.IntValue
+			if !ins.IsStatic {
+				count, _ = strconv.Atoi(s.expandVars(ins.Value))
+			}
 			for i := 0; i < count; i++ {
 				if s.execute(ins.Body, pkt) {
 					return true
 				}
 			}
 		case OpParallelLoop:
-			count, _ := strconv.Atoi(s.expandVars(ins.Value))
+			count := ins.IntValue
+			if !ins.IsStatic {
+				count, _ = strconv.Atoi(s.expandVars(ins.Value))
+			}
+			if count <= 0 {
+				continue
+			}
+			numWorkers := runtime.GOMAXPROCS(0)
+			if count < numWorkers {
+				numWorkers = count
+			}
 			var wg sync.WaitGroup
-			for i := 0; i < count; i++ {
-				wg.Add(1)
-				go func() {
+			wg.Add(numWorkers)
+			for w := 0; w < numWorkers; w++ {
+				go func(workerID int) {
 					defer wg.Done()
-					s.execute(ins.Body, pkt)
-				}()
+					start := (count * workerID) / numWorkers
+					end := (count * (workerID + 1)) / numWorkers
+					for i := start; i < end; i++ {
+						s.execute(ins.Body, pkt)
+					}
+				}(w)
 			}
 			wg.Wait()
 		case OpBased:
@@ -285,14 +332,14 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 				}(url, body, s.headers)
 			}
 		case OpIfPrint:
-			if s.evalLogic(s.expandVars(ins.Value), pkt) {
+			if s.evalLogic(ins.Condition, pkt) {
 				lastIfMet = true
 				fmt.Printf("[%s] %s\n", s.Name(), s.expandVars(ins.Message))
 			} else {
 				lastIfMet = false
 			}
 		case OpIfCall:
-			if s.evalLogic(s.expandVars(ins.Value), pkt) {
+			if s.evalLogic(ins.Condition, pkt) {
 				lastIfMet = true
 				if f, ok := s.Functions[ins.Message]; ok {
 					if s.execute(f, pkt) {
@@ -303,14 +350,14 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 				lastIfMet = false
 			}
 		case OpIfBlock:
-			if s.evalLogic(s.expandVars(ins.Value), pkt) {
+			if s.evalLogic(ins.Condition, pkt) {
 				lastIfMet = true
 				s.killProcess(pkt)
 			} else {
 				lastIfMet = false
 			}
 		case OpIfExec:
-			if s.evalLogic(s.expandVars(ins.Value), pkt) {
+			if s.evalLogic(ins.Condition, pkt) {
 				lastIfMet = true
 				expandedMsg := s.expandVars(ins.Message)
 				var cmd *exec.Cmd
@@ -325,7 +372,7 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 				lastIfMet = false
 			}
 		case OpIfPost:
-			if s.evalLogic(s.expandVars(ins.Value), pkt) {
+			if s.evalLogic(ins.Condition, pkt) {
 				lastIfMet = true
 				parts := strings.SplitN(s.expandVars(ins.Message), " ", 2)
 				if len(parts) == 2 {
@@ -349,7 +396,7 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 				lastIfMet = false
 			}
 		case OpIfBreak:
-			if s.evalLogic(s.expandVars(ins.Value), pkt) {
+			if s.evalLogic(ins.Condition, pkt) {
 				lastIfMet = true
 				return true
 			} else {
@@ -434,66 +481,47 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 	return false
 }
 
-func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
-	if strings.Contains(expr, " OR ") {
-		orParts := strings.Split(expr, " OR ")
-		if len(orParts) > 1 {
-			for _, part := range orParts {
-				if s.evalLogic(strings.TrimSpace(part), pkt) {
-					return true
-				}
-			}
-			return false
+func (s *ScriptPlugin) evalLogic(expr *LogicExpr, pkt *types.PacketData) bool {
+	if expr == nil {
+		return false
+	}
+
+	switch expr.Op {
+	case LogOr:
+		return s.evalLogic(expr.Left, pkt) || s.evalLogic(expr.Right, pkt)
+	case LogAnd:
+		return s.evalLogic(expr.Left, pkt) && s.evalLogic(expr.Right, pkt)
+	case LogLt, LogGt, LogEq:
+		leftVal, _ := strconv.Atoi(s.resolveOperand(expr.Left))
+		rightVal, _ := strconv.Atoi(s.resolveOperand(expr.Right))
+		if expr.Op == LogLt {
+			return leftVal < rightVal
 		}
-	}
-
-	if strings.Contains(expr, " AND ") {
-		andParts := strings.Split(expr, " AND ")
-		if len(andParts) > 1 {
-			for _, part := range andParts {
-				if !s.evalLogic(strings.TrimSpace(part), pkt) {
-					return false
-				}
-			}
-			return true
+		if expr.Op == LogGt {
+			return leftVal > rightVal
 		}
-	}
-
-	if idx := strings.Index(expr, " < "); idx != -1 {
-		leftStr := strings.TrimSpace(expr[:idx])
-		rightStr := strings.TrimSpace(expr[idx+3:])
-		left, err1 := strconv.Atoi(leftStr)
-		right, err2 := strconv.Atoi(rightStr)
-		return err1 == nil && err2 == nil && left < right
-	}
-	if idx := strings.Index(expr, " > "); idx != -1 {
-		leftStr := strings.TrimSpace(expr[:idx])
-		rightStr := strings.TrimSpace(expr[idx+3:])
-		left, err1 := strconv.Atoi(leftStr)
-		right, err2 := strconv.Atoi(rightStr)
-		return err1 == nil && err2 == nil && left > right
-	}
-
-	if strings.EqualFold(expr, "MALICIOUS") {
+		return leftVal == rightVal
+	case LogMalicious:
 		return pkt.IsMalicious
-	}
-
-	if strings.HasPrefix(strings.ToUpper(expr), "PROTO ") {
-		f := strings.Fields(expr)
-		if len(f) > 1 {
-			return strings.EqualFold(pkt.Protocol, f[1])
-		}
-	}
-	if strings.HasPrefix(strings.ToUpper(expr), "CONTAINS ") {
-		searchStr := strings.Trim(expr[9:], "\" ")
+	case LogProto:
+		return strings.EqualFold(pkt.Protocol, s.resolveOperand(expr.Right))
+	case LogContains:
+		searchStr := strings.Trim(s.resolveOperand(expr.Right), "\" ")
 		return strings.Contains(hex.Dump(pkt.Payload), searchStr)
+	case LogExt:
+		return s.evalExtCondition(expr.Value, pkt)
 	}
-
-	if strings.Contains(expr, ".") {
-		return s.evalExtCondition(expr, pkt)
-	}
-
 	return false
+}
+
+func (s *ScriptPlugin) resolveOperand(expr *LogicExpr) string {
+	if expr.Op == LogConst {
+		return expr.Value
+	}
+	if expr.Op == LogVar {
+		return s.expandVars("%" + expr.Value + "%")
+	}
+	return ""
 }
 
 func (s *ScriptPlugin) handleElseAction(ins instruction, pkt *types.PacketData) bool {

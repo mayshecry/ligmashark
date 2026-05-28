@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -29,6 +30,66 @@ func Compile(srcPath string) error {
 	}
 	stack := [][]instruction{{}}
 	var ctrlStack []control
+
+	var compileLogic func(string) *LogicExpr
+	compileLogic = func(expr string) *LogicExpr {
+		expr = strings.TrimSpace(expr)
+		if strings.Contains(expr, " OR ") {
+			parts := strings.SplitN(expr, " OR ", 2)
+			return &LogicExpr{Op: LogOr, Left: compileLogic(parts[0]), Right: compileLogic(parts[1])}
+		}
+		if strings.Contains(expr, " AND ") {
+			parts := strings.SplitN(expr, " AND ", 2)
+			return &LogicExpr{Op: LogAnd, Left: compileLogic(parts[0]), Right: compileLogic(parts[1])}
+		}
+
+		// Leaf nodes
+		if strings.EqualFold(expr, "MALICIOUS") {
+			return &LogicExpr{Op: LogMalicious}
+		}
+
+		operators := []struct {
+			token string
+			op    LogicOp
+		}{
+			{" < ", LogLt}, {" > ", LogGt}, {" == ", LogEq},
+			{"PROTO ", LogProto}, {"CONTAINS ", LogContains},
+		}
+
+		for _, o := range operators {
+			if idx := strings.Index(strings.ToUpper(expr), o.token); idx != -1 {
+				left := strings.TrimSpace(expr[:idx])
+				right := strings.TrimSpace(expr[idx+len(o.token):])
+				parseLeaf := func(s string) *LogicExpr {
+					s = strings.TrimSpace(s)
+					if strings.HasPrefix(s, "%") && strings.HasSuffix(s, "%") {
+						return &LogicExpr{Op: LogVar, Value: s[1 : len(s)-1]}
+					}
+					return &LogicExpr{Op: LogConst, Value: s}
+				}
+				return &LogicExpr{Op: o.op, Left: parseLeaf(left), Right: parseLeaf(right)}
+			}
+		}
+
+		if strings.Contains(expr, ".") {
+			return &LogicExpr{Op: LogExt, Value: expr}
+		}
+		return nil
+	}
+
+	// Helper to pre-process instruction fields
+	prepare := func(ins *instruction) {
+		if !strings.Contains(ins.Value, "%") {
+			ins.IsStatic = true
+			if v, err := strconv.Atoi(ins.Value); err == nil {
+				ins.IntValue = v
+			}
+		}
+		// Compile conditions if this is a control flow instruction
+		if ins.Op == OpWhile || (ins.Op >= OpIfPrint && ins.Op <= OpIfBreak) {
+			ins.Condition = compileLogic(ins.Value)
+		}
+	}
 
 	for scanner.Scan() {
 		lineNum++
@@ -77,7 +138,9 @@ func Compile(srcPath string) error {
 			if ctrl.op == "PARALLEL_LOOP" {
 				op = OpParallelLoop
 			}
-			stack[len(stack)-1] = append(stack[len(stack)-1], instruction{Op: op, Value: ctrl.val, Body: body})
+			ins := instruction{Op: op, Value: ctrl.val, Body: body}
+			prepare(&ins)
+			stack[len(stack)-1] = append(stack[len(stack)-1], ins)
 			continue
 		}
 
@@ -240,6 +303,7 @@ func Compile(srcPath string) error {
 				return fmt.Errorf("line %d: SLEEP requires ms", lineNum)
 			}
 			ins.Op, ins.Value = OpSleep, parts[1]
+			prepare(&ins)
 		case "CALL":
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: CALL requires a name", lineNum)
