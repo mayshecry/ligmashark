@@ -458,7 +458,7 @@ func (s *ScriptPlugin) handleElseAction(ins instruction, pkt *types.PacketData) 
 	case "ELSE_PRINT":
 		fmt.Printf("[%s] %s\n", s.Name(), msg)
 	case "ELSE_CALL":
-		if f, ok := s.Functions[val]; ok {
+		if f, ok := s.Functions[msg]; ok {
 			return s.execute(f, pkt)
 		}
 	case "ELSE_BLOCK":
@@ -620,7 +620,7 @@ func LoadPlugins(dir string) ([]types.Plugin, error) {
 
 		header := make([]byte, 7)
 		f.Read(header)
-		if string(header) != "LIGMA01" {
+		if string(header) != "LIGMA02" {
 			f.Close()
 			continue
 		}
@@ -687,7 +687,7 @@ func LoadPluginsFromFile(path string) ([]types.Plugin, error) {
 
 	header := make([]byte, 7)
 	f.Read(header)
-	if string(header) != "LIGMA01" {
+	if string(header) != "LIGMA02" {
 		return nil, fmt.Errorf("invalid file format")
 	}
 

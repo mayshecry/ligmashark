@@ -323,7 +323,7 @@ func Compile(srcPath string) error {
 	}
 	defer dest.Close()
 
-	dest.Write([]byte("LIGMA01"))
+	dest.Write([]byte("LIGMA02"))
 
 	script := CompiledScript{
 		Main:      stack[0],
