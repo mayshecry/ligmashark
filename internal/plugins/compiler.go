@@ -111,6 +111,14 @@ func Compile(srcPath string) error {
 			path := strings.TrimSuffix(parts[1], ";")
 			imports = append(imports, path)
 			ins.Op, ins.Value = "USE", path
+		case "TIMER_START":
+			ins.Op = "TIMER_START"
+		case "TIMER_END":
+			if len(parts) < 2 {
+				return fmt.Errorf("line %d: TIMER_END requires a variable to store result", lineNum)
+			}
+			ins.Op = "TIMER_END"
+			ins.Value = parts[1]
 		case "GET_ISP":
 			if len(parts) < 3 {
 				return fmt.Errorf("line %d: GET_ISP requires IP and variable", lineNum)

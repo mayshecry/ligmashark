@@ -37,6 +37,7 @@ type ScriptPlugin struct {
 	headers      map[string]string
 	ispCache     map[string]string
 	vars         map[string]string
+	timerStart   time.Time
 }
 
 func (s *ScriptPlugin) Name() string {
@@ -69,12 +70,12 @@ func (s *ScriptPlugin) OnPacket(pkt *types.PacketData) {
 func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool {
 	lastIfMet := false
 	for _, ins := range insts {
-		if strings.ToUpper(ins.Op) == "WHILE" {
+		op := ins.Op // Already uppercased by compiler
+		if op == "WHILE" {
 			for s.evalLogic(ins.Value, pkt) {
 				if s.execute(ins.Body, pkt) {
 					break
 				}
-				time.Sleep(1 * time.Millisecond)
 			}
 			continue
 		}
@@ -82,9 +83,13 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 		msg := s.expandVars(ins.Message)
 		val := s.expandVars(ins.Value)
 
-		switch strings.ToUpper(ins.Op) {
+		switch op {
 		case "USE":
 			s.imports[val] = true
+		case "TIMER_START":
+			s.timerStart = time.Now()
+		case "TIMER_END":
+			s.vars[ins.Value] = fmt.Sprintf("%.4f", time.Since(s.timerStart).Seconds())
 		case "SET":
 			s.vars[ins.Value] = msg
 		case "SET_EXPR":
@@ -104,7 +109,8 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			if curr == "" {
 				curr = "0"
 			}
-			s.vars[val] = s.evalMath(curr + "+1")
+			iv, _ := strconv.Atoi(curr)
+			s.vars[val] = strconv.Itoa(iv + 1)
 		case "LOOP":
 			count, _ := strconv.Atoi(s.expandVars(ins.Value))
 			for i := 0; i < count; i++ {
@@ -322,6 +328,7 @@ func (s *ScriptPlugin) handleAction(op, message, value string, pkt *types.Packet
 }
 
 func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
+	expr = s.expandVars(expr)
 	orParts := strings.Split(expr, " OR ")
 	if len(orParts) > 1 {
 		for _, part := range orParts {
@@ -343,16 +350,34 @@ func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
 	}
 
 	cond := strings.ToUpper(expr)
-	if cond == "MALICIOUS" {
+	if cond == "MALICIOUS" || expr == "malicious" {
 		return pkt.IsMalicious
 	}
 	if strings.HasPrefix(cond, "PROTO ") {
-		return strings.EqualFold(pkt.Protocol, strings.Fields(expr)[1])
+		f := strings.Fields(expr)
+		if len(f) > 1 {
+			return strings.EqualFold(pkt.Protocol, f[1])
+		}
 	}
 	if strings.HasPrefix(cond, "CONTAINS ") {
 		searchStr := strings.Trim(expr[9:], "\" ")
 		return strings.Contains(pkt.Payload, searchStr)
 	}
+
+	// Numeric comparisons for counting
+	if strings.Contains(expr, " < ") {
+		parts := strings.Split(expr, " < ")
+		left, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+		right, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
+		return left < right
+	}
+	if strings.Contains(expr, " > ") {
+		parts := strings.Split(expr, " > ")
+		left, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+		right, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
+		return left > right
+	}
+
 	if strings.Contains(expr, ".") {
 		return s.evalExtCondition(expr, pkt)
 	}
@@ -478,6 +503,9 @@ func (s *ScriptPlugin) evalMath(expr string) string {
 }
 
 func (s *ScriptPlugin) expandVars(input string) string {
+	if !strings.Contains(input, "%") {
+		return input
+	}
 	output := input
 	for k, v := range s.vars {
 		placeholder := "%" + k + "%"
