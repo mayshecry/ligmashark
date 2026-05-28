@@ -28,15 +28,15 @@ func Compile(srcPath string) error {
 		name string
 	}
 	stack := [][]instruction{{}}
-	ctrlStack := []control{}
+	var ctrlStack []control
 
 	for scanner.Scan() {
 		lineNum++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+		rawLine := scanner.Text()
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
 			continue
 		}
-
 		parts := strings.Fields(line)
 		if len(parts) < 1 {
 			continue
@@ -110,7 +110,10 @@ func Compile(srcPath string) error {
 		case "USE":
 			path := strings.TrimSuffix(parts[1], ";")
 			imports = append(imports, path)
-			ins.Op, ins.Value = "USE", path
+			ins.Op = "USE"
+			ins.Value = path
+		case "BREAK":
+			ins.Op = "BREAK"
 		case "TIMER_START":
 			ins.Op = "TIMER_START"
 		case "TIMER_END":
@@ -284,7 +287,7 @@ func Compile(srcPath string) error {
 			}
 
 		default:
-			return fmt.Errorf("line %d: unknown command %s", lineNum, cmd)
+			return fmt.Errorf("line %d: unknown or unsupported command '%s'", lineNum, cmd)
 		}
 
 		lastWasIf = currentIsIf
@@ -292,7 +295,7 @@ func Compile(srcPath string) error {
 	}
 
 	if len(ctrlStack) > 0 {
-		return fmt.Errorf("build error: unclosed block %s", ctrlStack[len(ctrlStack)-1].op)
+		return fmt.Errorf("compilation error: unclosed %s block (started before end of file)", ctrlStack[len(ctrlStack)-1].op)
 	}
 
 	destPath := strings.TrimSuffix(srcPath, ".shark") + ".ligma"
