@@ -63,6 +63,12 @@ const (
 	OpElse
 	OpBlock
 	OpIfMaliciousBlock
+	OpIfPrint
+	OpIfCall
+	OpIfBlock
+	OpIfExec
+	OpIfPost
+	OpIfBreak
 )
 
 type instruction struct {
@@ -233,12 +239,74 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 					}
 				}(url, body, s.headers)
 			}
-		case OpIfComplex:
+		case OpIfPrint:
 			if s.evalLogic(s.expandVars(ins.Value), pkt) {
 				lastIfMet = true
-				if s.handleAction(ins.Message, ins.Value, pkt) {
-					return true
+				fmt.Printf("[%s] %s\n", s.Name(), s.expandVars(ins.Message))
+			} else {
+				lastIfMet = false
+			}
+		case OpIfCall:
+			if s.evalLogic(s.expandVars(ins.Value), pkt) {
+				lastIfMet = true
+				if f, ok := s.Functions[ins.Message]; ok {
+					if s.execute(f, pkt) {
+						return true
+					}
 				}
+			} else {
+				lastIfMet = false
+			}
+		case OpIfBlock:
+			if s.evalLogic(s.expandVars(ins.Value), pkt) {
+				lastIfMet = true
+				s.killProcess(pkt)
+			} else {
+				lastIfMet = false
+			}
+		case OpIfExec:
+			if s.evalLogic(s.expandVars(ins.Value), pkt) {
+				lastIfMet = true
+				expandedMsg := s.expandVars(ins.Message)
+				var cmd *exec.Cmd
+				if runtime.GOOS == "windows" {
+					cmd = exec.Command("cmd", "/C", expandedMsg)
+				} else {
+					cmd = exec.Command("sh", "-c", expandedMsg)
+				}
+				go cmd.Run()
+				fmt.Printf("[%s] 🚀 EXEC: %s\n", s.Name(), expandedMsg)
+			} else {
+				lastIfMet = false
+			}
+		case OpIfPost:
+			if s.evalLogic(s.expandVars(ins.Value), pkt) {
+				lastIfMet = true
+				parts := strings.SplitN(s.expandVars(ins.Message), " ", 2)
+				if len(parts) == 2 {
+					url, body := parts[0], parts[1]
+					go func(u, b string, h map[string]string) {
+						req, err := http.NewRequest("POST", u, strings.NewReader(b))
+						if err != nil || req == nil {
+							return
+						}
+						req.Header.Set("Content-Type", "application/json")
+						for k, v := range h {
+							req.Header.Set(k, v)
+						}
+						resp, err := http.DefaultClient.Do(req)
+						if err == nil {
+							resp.Body.Close()
+						}
+					}(url, body, s.headers)
+				}
+			} else {
+				lastIfMet = false
+			}
+		case OpIfBreak:
+			if s.evalLogic(s.expandVars(ins.Value), pkt) {
+				lastIfMet = true
+				return true
 			} else {
 				lastIfMet = false
 			}
@@ -316,52 +384,6 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			} else {
 				lastIfMet = false
 			}
-		}
-	}
-	return false
-}
-
-func (s *ScriptPlugin) handleAction(message, value string, pkt *types.PacketData) bool {
-	msg := s.expandVars(message)
-	// value contains the specific complex action code from compiler
-	switch value {
-	case "BREAK":
-		return true
-	case "PRINT":
-		fmt.Printf("[%s] %s\n", s.Name(), msg)
-	case "CALL":
-		if f, ok := s.Functions[message]; ok {
-			return s.execute(f, pkt)
-		}
-	case "BLOCK":
-		s.killProcess(pkt)
-	case "EXEC":
-		var cmd *exec.Cmd
-		if runtime.GOOS == "windows" {
-			cmd = exec.Command("cmd", "/C", msg)
-		} else {
-			cmd = exec.Command("sh", "-c", msg)
-		}
-		go cmd.Run()
-		fmt.Printf("[%s] 🚀 EXEC: %s\n", s.Name(), msg)
-	case "POST":
-		parts := strings.SplitN(msg, " ", 2)
-		if len(parts) == 2 {
-			url, body := parts[0], parts[1]
-			go func(u, b string, h map[string]string) {
-				req, err := http.NewRequest("POST", u, strings.NewReader(b))
-				if err != nil || req == nil {
-					return
-				}
-				req.Header.Set("Content-Type", "application/json")
-				for k, v := range h {
-					req.Header.Set(k, v)
-				}
-				resp, err := http.DefaultClient.Do(req)
-				if err == nil {
-					resp.Body.Close()
-				}
-			}(url, body, s.headers)
 		}
 	}
 	return false

@@ -282,16 +282,28 @@ func Compile(srcPath string) error {
 				if actionIdx+1 >= len(parts) || strings.ToUpper(parts[actionIdx+1]) != "POST" {
 					return fmt.Errorf("line %d: HTTP must be followed by POST", lineNum)
 				}
-				ins.Op = OpIfComplex
+				ins.Op = OpIfPost
 				ins.Value = strings.Join(parts[1:actionIdx], " ")
 				ins.Message = parts[actionIdx+2] + " " + strings.Join(parts[actionIdx+3:], " ")
 			} else {
-				ins.Op = OpIfComplex
-				ins.Value = strings.Join(parts[1:actionIdx], " ") // Condition
-				ins.Value = strings.ToUpper(parts[actionIdx])     // Specific Action
+				action := strings.ToUpper(parts[actionIdx])
+				switch action {
+				case "PRINT":
+					ins.Op = OpIfPrint
+				case "CALL":
+					ins.Op = OpIfCall
+				case "BLOCK":
+					ins.Op = OpIfBlock
+				case "EXEC":
+					ins.Op = OpIfExec
+				case "POST":
+					ins.Op = OpIfPost
+				case "BREAK":
+					ins.Op = OpIfBreak
+				}
+				ins.Value = strings.Join(parts[1:actionIdx], " ")
 				ins.Message = strings.Join(parts[actionIdx+1:], " ")
 			}
-
 		default:
 			return fmt.Errorf("line %d: unknown or unsupported command '%s'", lineNum, cmd)
 		}
