@@ -220,23 +220,23 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 				lastIfMet = false
 			}
 		case "IF_PROTO":
-			if strings.EqualFold(pkt.Protocol, val) {
+			if strings.EqualFold(pkt.Protocol, s.expandVars(ins.Value)) {
 				lastIfMet = true
-				fmt.Printf("[%s] %s\n", s.Name(), msg)
+				fmt.Printf("[%s] %s\n", s.Name(), s.expandVars(ins.Message))
 			} else {
 				lastIfMet = false
 			}
 		case "IF_EXT":
-			if s.evalExtCondition(val, pkt) {
+			if s.evalExtCondition(ins.Value, pkt) {
 				lastIfMet = true
-				fmt.Printf("[%s] %s\n", s.Name(), msg)
+				fmt.Printf("[%s] %s\n", s.Name(), s.expandVars(ins.Message))
 			} else {
 				lastIfMet = false
 			}
 		case "IF_EXT_CALL":
-			if s.evalExtCondition(val, pkt) {
+			if s.evalExtCondition(ins.Value, pkt) {
 				lastIfMet = true
-				if f, ok := s.Functions[val]; ok {
+				if f, ok := s.Functions[ins.Value]; ok {
 					if s.execute(f, pkt) {
 						return true
 					}
