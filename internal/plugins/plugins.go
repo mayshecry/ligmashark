@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"encoding/gob"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -35,7 +36,6 @@ type ScriptPlugin struct {
 	Functions    map[string][]instruction
 	imports      map[string]bool
 	headers      map[string]string
-	ispCache     map[string]string
 	vars         map[string]string
 	timerStart   time.Time
 }
@@ -53,9 +53,6 @@ func (s *ScriptPlugin) OnPacket(pkt *types.PacketData) {
 	}
 	if s.headers == nil {
 		s.headers = make(map[string]string)
-	}
-	if s.ispCache == nil {
-		s.ispCache = make(map[string]string)
 	}
 
 	s.vars["SRC_IP"] = pkt.SrcIP
@@ -99,7 +96,7 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 		case "GET_HEADER":
 			s.vars[msg] = pkt.HTTPHeaders[val]
 		case "GET_ISP":
-			s.vars[msg] = network.GetISP(val, s.ispCache)
+			s.vars[msg] = network.GetISP(val)
 		case "TIME":
 			s.vars[val] = strconv.FormatInt(time.Now().UnixMilli(), 10)
 		case "BREAK":
@@ -390,7 +387,7 @@ func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
 	}
 	if len(expr) >= 9 && strings.ToUpper(expr[:9]) == "CONTAINS " {
 		searchStr := strings.Trim(expr[9:], "\" ")
-		return strings.Contains(pkt.Payload, searchStr)
+		return strings.Contains(hex.Dump(pkt.Payload), searchStr)
 	}
 
 	if strings.Contains(expr, ".") {
@@ -559,7 +556,6 @@ func LoadPlugins(dir string) ([]types.Plugin, error) {
 				imports:      make(map[string]bool),
 				vars:         make(map[string]string),
 				headers:      make(map[string]string),
-				ispCache:     make(map[string]string),
 			})
 			for _, imp := range script.Imports {
 				loadedPlugins[len(loadedPlugins)-1].(*ScriptPlugin).imports[imp] = true
@@ -629,7 +625,6 @@ func LoadPluginsFromFile(path string) ([]types.Plugin, error) {
 		imports:      make(map[string]bool),
 		vars:         make(map[string]string),
 		headers:      make(map[string]string),
-		ispCache:     make(map[string]string),
 	}
 
 	for _, imp := range script.Imports {

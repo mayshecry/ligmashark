@@ -17,7 +17,7 @@ type PacketData struct {
 	Length      int
 	ISP         string
 	Service     string
-	Payload     string
+	Payload     []byte
 	ProcessName string
 	Hostname    string
 	PID         int32

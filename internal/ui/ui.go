@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bufio"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -568,7 +569,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateViewport()
 			case "a":
 				m.AutoScroll = !m.AutoScroll
-			case "o":
+			case "O":
 				m.SortMode = (m.SortMode + 1) % 3
 				m.refreshList()
 			case "X":
@@ -612,13 +613,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.TrafficSelectedIdx = -1
 					m.updateViewport()
 				}
-			case "u", "pgup":
+			case "u", "i", "pgup":
 				m.TrafficSelectedIdx--
 				if m.TrafficSelectedIdx < 0 {
 					m.TrafficSelectedIdx = 0
 				}
 				m.Viewport.Update(msg)
-			case "d", "pgdown":
+			case "d", "o", "pgdown":
 				m.TrafficSelectedIdx++
 				if m.TrafficSelectedIdx >= len(m.VisiblePackets) {
 					m.TrafficSelectedIdx = len(m.VisiblePackets) - 1
@@ -1830,7 +1831,7 @@ func (m *Model) getPacketDetailContent() string {
 	sb.WriteString(sectionHeader.Render("▣ AI ANALYSIS ("+m.getSelectedModelName()+")") + "\n")
 	sb.WriteString(renderedAI + "\n")
 	sb.WriteString(sectionHeader.Render("▣ RAW PAYLOAD") + "\n")
-	sb.WriteString(m.InspectedPacket.Payload + "\n")
+	sb.WriteString(hex.Dump(m.InspectedPacket.Payload) + "\n")
 
 	return sb.String()
 }
@@ -2237,7 +2238,7 @@ func (m *Model) getFilteredMITMPackets() []types.PacketData {
 			if !strings.Contains(strings.ToLower(pkt.SrcIP), search) &&
 				!strings.Contains(strings.ToLower(pkt.DstIP), search) &&
 				!strings.Contains(strings.ToLower(pkt.ISP), search) &&
-				!strings.Contains(strings.ToLower(pkt.Payload), search) {
+				!strings.Contains(strings.ToLower(hex.Dump(pkt.Payload)), search) {
 				continue
 			}
 		}

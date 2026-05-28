@@ -2,6 +2,7 @@ package ai
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -103,7 +104,7 @@ func AnalyzePayload(pkt types.PacketData, modelName string) (string, error) {
 		"Process: %s\n"+
 		"Detected Service: %s\n"+
 		"Payload Hex Dump:\n%s",
-		hint, pkt.Protocol, pkt.SrcIP, pkt.SrcPort, pkt.DstIP, pkt.DstPort, pkt.ISP, pkt.ProcessName, pkt.Service, pkt.Payload)
+		hint, pkt.Protocol, pkt.SrcIP, pkt.SrcPort, pkt.DstIP, pkt.DstPort, pkt.ISP, pkt.ProcessName, pkt.Service, hex.Dump(pkt.Payload))
 
 	body, err := json.Marshal(map[string]interface{}{
 		"model":  modelName,

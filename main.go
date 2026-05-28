@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -131,7 +130,6 @@ esac
 	}
 
 	processes := make(map[int32]*types.ProcItem)
-	ispCache := make(map[string]string)
 	hostnameCache := make(map[string]string)
 	threatBlocklist := network.LoadThreatBlocklist()
 
@@ -256,7 +254,7 @@ esac
 					DstPort:     dstPort,
 					Protocol:    protocol,
 					Length:      len(packet.Data()),
-					ISP:         network.GetISP(remoteIP, ispCache),
+					ISP:         network.GetISP(remoteIP),
 					Service:     network.IdentifyService(processes[pid].Name, srcPort, dstPort),
 					IsMalicious: isMalicious,
 					PID:         pid,
@@ -282,7 +280,7 @@ esac
 
 				if appLayer := packet.ApplicationLayer(); appLayer != nil {
 					payload := appLayer.Payload()
-					pkt.Payload = hex.Dump(payload)
+					pkt.Payload = payload
 
 					payloadStr := string(payload)
 					if strings.HasPrefix(payloadStr, "HTTP/") {
@@ -300,7 +298,7 @@ esac
 						}
 					}
 				} else {
-					pkt.Payload = ""
+					pkt.Payload = nil
 				}
 				if procItem, exists := processes[pid]; exists {
 					pkt.ProcessName = procItem.Name

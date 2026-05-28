@@ -19,6 +19,8 @@ var (
 	connCacheMu sync.RWMutex
 	hostMu      sync.RWMutex
 	hostCache   = make(map[string]string)
+	ispMu       sync.RWMutex
+	ispCache    = make(map[string]string)
 )
 
 func init() {
@@ -84,33 +86,45 @@ func IsHostIP(ip string) bool {
 	return ip == "127.0.0.1" || ip == "::1"
 }
 
-func GetISP(ip string, cache map[string]string) string {
-	if val, ok := cache[ip]; ok {
+func GetISP(ip string) string {
+	ispMu.RLock()
+	if val, ok := ispCache[ip]; ok {
+		ispMu.RUnlock()
 		return val
 	}
+	ispMu.RUnlock()
+
 	if IsLocalIP(ip) {
 		return "Local Network"
 	}
 
-	resp, err := http.Get("http://ip-api.com/json/" + ip + "?fields=isp")
-	if err != nil {
-		return "Unknown"
-	}
-	defer resp.Body.Close()
+	ispMu.Lock()
+	ispCache[ip] = "Resolving..."
+	ispMu.Unlock()
 
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return "API Rate Limited"
-	}
+	go func(target string) {
+		resp, err := http.Get("http://ip-api.com/json/" + target + "?fields=isp")
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
 
-	var r struct {
-		Isp string `json:"isp"`
-	}
-	json.NewDecoder(resp.Body).Decode(&r)
-	if r.Isp == "" {
-		r.Isp = "Unknown"
-	}
-	cache[ip] = r.Isp
-	return r.Isp
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return
+		}
+
+		var r struct {
+			Isp string `json:"isp"`
+		}
+		json.NewDecoder(resp.Body).Decode(&r)
+		if r.Isp != "" {
+			ispMu.Lock()
+			ispCache[target] = r.Isp
+			ispMu.Unlock()
+		}
+	}(ip)
+
+	return "Resolving..."
 }
 
 func LoadThreatBlocklist() map[string]bool {
