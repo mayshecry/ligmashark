@@ -95,7 +95,7 @@ func AnalyzePayload(pkt types.PacketData, modelName string) (string, error) {
 
 	prompt := fmt.Sprintf("Analyze this network packet as a technical expert. %s"+
 		"Explain what this packet is doing and its probable intent. Be objective and technical; do not assume malicious intent or 'hacking' unless explicitly clear. "+
-		"IMPORTANT: Do not use any markdown formatting. Do not use bold text (no ** characters). Provide only plain text in a single paragraph.\n\n"+
+		"You may use bold text for emphasis by wrapping key terms in double asterisks like **this**. Avoid other markdown formatting. Provide plain text in a single paragraph.\n\n"+
 		"Protocol: %s\n"+
 		"Source: %s:%s\n"+
 		"Destination: %s:%s\n"+

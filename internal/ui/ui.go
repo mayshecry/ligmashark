@@ -76,6 +76,7 @@ type Model struct {
 	ProcessSearchInput   string
 	ActiveProcessSearch  string
 	SystemInfo           types.SystemInfo
+	TrafficSelectedIdx   int
 	VisiblePackets       []types.PacketData
 	InspectedPacket      types.PacketData
 	ActiveCategory       string
@@ -95,6 +96,7 @@ type Model struct {
 	GlobalViewport       CustomViewport
 	GlobalSelectedIdx    int
 	MITMPackets          []types.PacketData
+	TopologyViewport     CustomViewport
 	OllamaStatus         string
 	ExportStatus         string
 	CursorVisible        bool
@@ -110,6 +112,7 @@ type Model struct {
 	SelectedModelIdx     int
 	SelectedThemeIdx     int
 	SortMode             int
+	ReturnMode           Mode
 }
 
 var Themes = []struct {
@@ -139,12 +142,14 @@ func NewModel(processes map[int32]*types.ProcItem, mu *sync.RWMutex, sysInfo typ
 		HelpViewport:         NewCustomViewport(),
 		BettercapViewport:    NewCustomViewport(),
 		GlobalViewport:       NewCustomViewport(),
+		TopologyViewport:     NewCustomViewport(),
 		CategoryList:         []string{"Communication", "Browsers", "VPN & Privacy", "System", "Other", "All Traffic"},
 		ActiveCategory:       "All Traffic",
 		MITMSelectedIdx:      -1,
 		GlobalSelectedIdx:    -1,
 		BettercapModules:     make(map[string]bool),
 		MITMPackets:          make([]types.PacketData, 0),
+		TrafficSelectedIdx:   -1,
 		MITMJunkFilter:       true,
 		MITMProtocolFilter:   "ALL",
 		ProcessFilterSetting: FilterEverything,
@@ -158,6 +163,7 @@ func NewModel(processes map[int32]*types.ProcItem, mu *sync.RWMutex, sysInfo typ
 		UseMITMSetting:       true,
 		AvailableModels:      []string{"qwen2.5:0.5b", "qwen2:0.5b", "phi3:mini", "tinyllama", "smollm:135m", "llama3.2:1b", "gemma:2b", "orca-mini", "granite-code:3b", "deepseek-coder:1.3b", "stable-code:3b"},
 		SortMode:             0,
+		ReturnMode:           NormalMode,
 	}
 	m.loadConfig()
 	return m
@@ -199,12 +205,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if m.Mode == CategorySelectionMode {
 			switch msg.String() {
-			case "up", "k", "left":
+			case "up", "k":
+				m.CategoryCursor -= 2
+				if m.CategoryCursor < 0 {
+					m.CategoryCursor += 6
+				}
+			case "down", "j":
+				m.CategoryCursor += 2
+				if m.CategoryCursor >= len(m.CategoryList) {
+					m.CategoryCursor -= 6
+				}
+			case "left", "h":
 				m.CategoryCursor--
 				if m.CategoryCursor < 0 {
-					m.CategoryCursor = len(m.CategoryList) - 1
+					m.CategoryCursor = 5
 				}
-			case "down", "j", "right":
+			case "right", "l":
 				m.CategoryCursor++
 				if m.CategoryCursor >= len(m.CategoryList) {
 					m.CategoryCursor = 0
@@ -213,6 +229,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.ActiveCategory = m.CategoryList[m.CategoryCursor]
 				m.Mode = NormalMode
 				m.refreshList()
+				m.ReturnMode = NormalMode
 			case "esc", "q":
 				m.Mode = LandingPageMode
 			}
@@ -224,11 +241,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "up", "k":
 				m.SettingsCursor--
 				if m.SettingsCursor < 0 {
-					m.SettingsCursor = 4
+					m.SettingsCursor = 7
 				}
 			case "down", "j":
 				m.SettingsCursor++
-				if m.SettingsCursor > 4 {
+				if m.SettingsCursor > 7 {
 					m.SettingsCursor = 0
 				}
 			case "left", "h":
@@ -238,27 +255,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.SettingsCursor == 3 {
 					m.SelectedThemeIdx = (m.SelectedThemeIdx - 1 + len(Themes)) % len(Themes)
 				}
+				if m.SettingsCursor == 5 {
+					m.SortMode = (m.SortMode - 1 + 3) % 3
+				}
 			case "right", "l":
 				if m.SettingsCursor == 1 && len(m.AvailableModels) > 0 {
 					m.SelectedModelIdx = (m.SelectedModelIdx + 1) % len(m.AvailableModels)
 				}
-				if m.SettingsCursor == 3 {
+				if m.SettingsCursor == 6 {
 					m.SelectedThemeIdx = (m.SelectedThemeIdx + 1) % len(Themes)
 				}
-			case "enter", " ":
-				switch m.SettingsCursor {
-				case 0:
-					m.UseAI = !m.UseAI
-				case 1:
-					if len(m.AvailableModels) > 0 {
-						m.SelectedModelIdx = (m.SelectedModelIdx + 1) % len(m.AvailableModels)
-					}
-				case 2:
-					m.UseMITMSetting = !m.UseMITMSetting
-				case 3:
-					m.Mode = NormalMode
+				if m.SettingsCursor == 5 {
+					m.SortMode = (m.SortMode + 1) % 3
 				}
+			case "enter", " ":
+				m.handleSettingsAction()
 			}
+			m.saveConfig()
 			return m, nil
 		} else if m.Mode == BettercapMode {
 			if m.MITMSearchActive {
@@ -280,7 +293,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			switch msg.String() {
 			case "esc", "q", "b":
+				if network.IsMITMActive() {
+					_ = network.StopMITM()
+					m.MITMStatus = "MITM: Off"
+					m.BettercapModules["arp.spoof"] = false
+					m.BettercapModules["net.sniff"] = false
+				}
 				m.Mode = NormalMode
+				m.ReturnMode = NormalMode
+				m.ExportStatus = ""
+			case "n":
+				m.ReturnMode = m.Mode
+				m.Mode = NetworkTopologyMode
+				m.TopologyViewport.scrollOffset = 0
+				return m, nil
+			case "g":
+				m.ReturnMode = m.Mode
+				m.Mode = GraphMode
+				return m, nil
+			case "t":
+				m.Mode = GlobalTrafficMode
 				m.ExportStatus = ""
 			case "x":
 				m.MITMJunkFilter = !m.MITMJunkFilter
@@ -344,7 +376,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				packets := m.getFilteredMITMPackets()
 				if m.MITMSelectedIdx >= 0 && m.MITMSelectedIdx < len(packets) {
 					m.InspectedPacket = packets[m.MITMSelectedIdx]
+					m.ReturnMode = BettercapMode
 					m.Mode = PacketDetailMode
+					m.PacketDetailViewport.scrollOffset = 0
 					m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
 					return m, m.analyzePacketCmd(m.InspectedPacket)
 				}
@@ -355,7 +389,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.Mode == GraphMode {
 			switch msg.String() {
 			case "esc", "q", "g", "h":
-				m.Mode = NormalMode
+				m.Mode = m.ReturnMode
 				m.GraphScrollOffset = 0
 			case "left":
 				m.GraphScrollOffset++
@@ -376,7 +410,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.Mode == PacketDetailMode {
 			switch msg.String() {
 			case "esc", "q", "backspace":
-				m.Mode = NormalMode
+				m.Mode = m.ReturnMode
 				m.ExportStatus = ""
 			case "e":
 				m.ExportStatus = "Exporting..."
@@ -387,7 +421,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if m.Mode == LandingPageMode {
 			switch msg.String() {
-			case "q", "enter", "esc", "h":
+			case "q":
+				return m, tea.Quit
+			case "enter", "esc", "h":
 				m.Mode = CategorySelectionMode
 			}
 		} else if m.Mode == GlobalTrafficMode {
@@ -421,7 +457,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				if m.GlobalSelectedIdx >= 0 && m.GlobalSelectedIdx < len(m.GlobalPackets) {
 					m.InspectedPacket = m.GlobalPackets[m.GlobalSelectedIdx]
+					m.TrafficSelectedIdx = m.GlobalSelectedIdx
+					m.ReturnMode = GlobalTrafficMode
 					m.Mode = PacketDetailMode
+					m.PacketDetailViewport.scrollOffset = 0
 					m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
 					return m, m.analyzePacketCmd(m.InspectedPacket)
 				}
@@ -432,7 +471,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.Mode == NetworkTopologyMode {
 			switch msg.String() {
 			case "esc", "q", "n":
-				m.Mode = NormalMode
+				m.Mode = m.ReturnMode
+			default:
+				m.TopologyViewport.Update(msg)
 			}
 			return m, nil
 		} else if m.Mode == FilterMode {
@@ -482,10 +523,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.HelpViewport.SetContent(m.renderHelpMenuContent())
 				return m, nil
 			case "b":
+				m.ReturnMode = m.Mode
 				m.Mode = BettercapMode
 				m.updateBettercapViewport()
 				return m, nil
 			case "S":
+				m.ReturnMode = m.Mode
 				m.Mode = SettingsMode
 				return m, nil
 			case "m":
@@ -556,39 +599,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Mu.Unlock()
 				m.updateViewport()
 
-			case "t":
-				m.Mode = GlobalTrafficMode
-				m.updateGlobalViewport()
-				return m, nil
-			case "n":
-				m.Mode = NetworkTopologyMode
-				return m, nil
-			case "h", "q":
-				m.Mode = CategorySelectionMode
-				return m, nil
-			case "/":
-				m.FilterInput = ""
-				m.Mode = FilterMode
-				m.FilterInput = m.ActiveFilter
-			case ";":
-				m.ProcessSearchInput = ""
-				m.Mode = ProcessSearchMode
-				m.ProcessSearchInput = m.ActiveProcessSearch
 			case "enter":
 				if i := m.List.SelectedItem(); i != nil {
 					m.SelectedPid = i.PID
+					m.TrafficSelectedIdx = -1
 					m.updateViewport()
 				}
 			case "up", "down", "j", "k":
 				m.List.Update(msg)
 				if i := m.List.SelectedItem(); i != nil {
 					m.SelectedPid = i.PID
+					m.TrafficSelectedIdx = -1
 					m.updateViewport()
 				}
-				if m.Mode == BettercapMode {
-					m.updateBettercapViewport()
+			case "u", "pgup":
+				m.TrafficSelectedIdx--
+				if m.TrafficSelectedIdx < 0 {
+					m.TrafficSelectedIdx = 0
 				}
-			case "pgup", "pgdown", "u", "d":
+				m.Viewport.Update(msg)
+			case "d", "pgdown":
+				m.TrafficSelectedIdx++
+				if m.TrafficSelectedIdx >= len(m.VisiblePackets) {
+					m.TrafficSelectedIdx = len(m.VisiblePackets) - 1
+				}
 				m.Viewport.Update(msg)
 			case "home", "end", "G":
 				m.List.Update(msg)
@@ -607,13 +641,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if m.Mode == CategorySelectionMode {
 			if msg.Type == tea.MouseLeft {
-				contentHeight := 4 + len(m.CategoryList)
-				startY := (m.Height-contentHeight)/2 + 2
-				if msg.Y >= startY && msg.Y < startY+len(m.CategoryList) {
-					m.CategoryCursor = msg.Y - startY
-					m.ActiveCategory = m.CategoryList[m.CategoryCursor]
-					m.Mode = NormalMode
-					m.refreshList()
+				gridHeight, gridWidth := 15, 66
+				startY := (m.Height-gridHeight)/2 + 2
+				startX := (m.Width - gridWidth) / 2
+				if msg.Y >= startY && msg.Y < startY+gridHeight && msg.X >= startX && msg.X < startX+gridWidth {
+					row := (msg.Y - startY) / 5
+					col := (msg.X - startX) / 33
+					idx := row*2 + col
+					if idx >= 0 && idx < 6 {
+						m.CategoryCursor = idx
+						m.ActiveCategory = m.CategoryList[m.CategoryCursor]
+						m.Mode = NormalMode
+						m.refreshList()
+					}
 				}
 			} else if msg.Type == tea.MouseWheelUp {
 				m.CategoryCursor--
@@ -642,8 +682,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						clickedIdx := start + (msg.Y - 7)
 						if clickedIdx >= 0 && clickedIdx < packetCount {
 							if m.GlobalSelectedIdx == clickedIdx {
+								m.TrafficSelectedIdx = clickedIdx
 								m.InspectedPacket = m.GlobalPackets[clickedIdx]
+								m.ReturnMode = GlobalTrafficMode
 								m.Mode = PacketDetailMode
+								m.PacketDetailViewport.scrollOffset = 0
 								m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
 								return m, m.analyzePacketCmd(m.InspectedPacket)
 							}
@@ -667,15 +710,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if m.Mode == SettingsMode {
 			if msg.Type == tea.MouseWheelUp {
-				m.SettingsCursor = (m.SettingsCursor - 1 + 5) % 5
+				m.SettingsCursor = (m.SettingsCursor - 1 + 8) % 8
 			} else if msg.Type == tea.MouseWheelDown {
-				m.SettingsCursor = (m.SettingsCursor + 1) % 5
+				m.SettingsCursor = (m.SettingsCursor + 1) % 8
+			} else if msg.Type == tea.MouseLeft {
+				contentHeight := 12
+				startY := (m.Height-contentHeight)/2 + 2
+				if msg.Y >= startY && msg.Y < startY+8 {
+					m.SettingsCursor = msg.Y - startY
+					m.handleSettingsAction()
+				}
 			}
 			m.saveConfig()
 			return m, nil
 		} else if m.Mode == PacketDetailMode {
 			if msg.Type == tea.MouseLeft {
-				m.Mode = NormalMode
+				m.Mode = m.ReturnMode
 				return m, nil
 			}
 			if msg.Type == tea.MouseWheelUp {
@@ -699,8 +749,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						clickedIdx := start + (msg.Y - 7)
 						if clickedIdx >= 0 && clickedIdx < packetCount {
 							if m.MITMSelectedIdx == clickedIdx {
+								m.TrafficSelectedIdx = clickedIdx
 								m.InspectedPacket = packets[clickedIdx]
+								m.ReturnMode = BettercapMode
 								m.Mode = PacketDetailMode
+								m.PacketDetailViewport.scrollOffset = 0
 								m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
 								return m, m.analyzePacketCmd(m.InspectedPacket)
 							}
@@ -733,8 +786,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if row >= 4 {
 						pktIdx := row - 4 + m.Viewport.scrollOffset
 						if pktIdx >= 0 && pktIdx < len(m.VisiblePackets) {
+							m.TrafficSelectedIdx = pktIdx
 							m.InspectedPacket = m.VisiblePackets[pktIdx]
+							m.ReturnMode = NormalMode
 							m.Mode = PacketDetailMode
+							m.PacketDetailViewport.scrollOffset = 0
 							m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
 							m.InspectedPacket.AIAnalysis = ""
 							return m, m.analyzePacketCmd(m.InspectedPacket)
@@ -758,6 +814,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.List.selected = target
 							if i := m.List.SelectedItem(); i != nil {
 								m.SelectedPid = i.PID
+								m.TrafficSelectedIdx = -1
 								m.updateViewport()
 							}
 						}
@@ -767,6 +824,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if msg.Type == tea.MouseLeft && msg.Y >= m.Height-1 {
 				if msg.X >= m.Width-15 {
+					m.ReturnMode = NormalMode
 					m.Mode = SettingsMode
 					return m, nil
 				}
@@ -779,10 +837,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if msg.X >= 34 && msg.X < 44 {
+					m.ReturnMode = NormalMode
 					m.Mode = GraphMode
 					return m, nil
 				}
 				if msg.X >= 45 && msg.X < 53 {
+					m.ReturnMode = NormalMode
 					m.Mode = NetworkTopologyMode
 					return m, nil
 				}
@@ -814,14 +874,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
-		listWidth := msg.Width / 3
-		viewportWidth := msg.Width - listWidth - 4
+		listWidth := msg.Width / 5
+		topoWidth := msg.Width / 5
+		viewportWidth := msg.Width - listWidth - topoWidth - 10
 		listHeight := msg.Height - 4
 
-		m.PacketDetailViewport.SetSize(m.Width-4, m.Height-2)
+		m.PacketDetailViewport.SetSize(m.Width-12, m.Height-12)
 		m.HelpViewport.SetSize(m.Width-4, m.Height-2)
 		m.BettercapViewport.SetSize(m.Width-4, m.Height-12)
 		m.GlobalViewport.SetSize(m.Width-4, m.Height-12)
+		m.TopologyViewport.SetSize(m.Width-8, m.Height-10)
 		if m.Mode == PacketDetailMode {
 			m.PacketDetailViewport.SetContent(m.getPacketDetailContent())
 			return m, nil
@@ -907,11 +969,15 @@ func (m *Model) saveConfig() {
 		UseMITMSetting bool `json:"use_mitm"`
 		ModelIdx       int  `json:"model_idx"`
 		ThemeIdx       int  `json:"theme_idx"`
+		AutoScroll     bool `json:"auto_scroll"`
+		JunkFilter     bool `json:"junk_filter"`
 	}{
 		UseAI:          m.UseAI,
 		UseMITMSetting: m.UseMITMSetting,
 		ModelIdx:       m.SelectedModelIdx,
 		ThemeIdx:       m.SelectedThemeIdx,
+		AutoScroll:     m.AutoScroll,
+		JunkFilter:     m.MITMJunkFilter,
 	}
 	data, _ := json.Marshal(cfg)
 	_ = os.WriteFile("config.json", data, 0644)
@@ -927,12 +993,16 @@ func (m *Model) loadConfig() {
 		UseMITMSetting bool `json:"use_mitm"`
 		ModelIdx       int  `json:"model_idx"`
 		ThemeIdx       int  `json:"theme_idx"`
+		AutoScroll     bool `json:"auto_scroll"`
+		JunkFilter     bool `json:"junk_filter"`
 	}
 	if err := json.Unmarshal(data, &cfg); err == nil {
 		m.UseAI = cfg.UseAI
 		m.UseMITMSetting = cfg.UseMITMSetting
 		m.SelectedModelIdx = cfg.ModelIdx
 		m.SelectedThemeIdx = cfg.ThemeIdx
+		m.AutoScroll = cfg.AutoScroll
+		m.MITMJunkFilter = cfg.JunkFilter
 	}
 }
 
@@ -1111,15 +1181,26 @@ func (m *Model) updateBettercapViewport() {
 	}
 
 	if len(packets) == 0 {
-		sb.WriteString("\nWaiting for intercepted traffic... (Is ARP spoofing active?)\n")
+		primary := lipgloss.Color(m.getTheme().Primary)
+		accent := lipgloss.Color(m.getTheme().Accent)
+
+		sb.WriteString("\n\n")
+		if !network.IsMITMActive() {
+			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("160")).Bold(true).Render("  BETTERCAP ENGINE IS OFFLINE") + "\n")
+			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("  Press [M] to initialize the MITM modules.") + "\n")
+		} else {
+			sb.WriteString(lipgloss.NewStyle().Foreground(primary).Bold(true).Render("  WAITING FOR INTERCEPTED TRAFFIC...") + "\n")
+			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("  Ensure ARP spoofing is targeting active hosts on the network.") + "\n")
+		}
+
 		if len(m.BettercapLogs) > 0 {
-			sb.WriteString("\nRecent Bettercap Events:\n")
+			sb.WriteString("\n" + lipgloss.NewStyle().Foreground(accent).Bold(true).Render("  RECENT BETTERCAP EVENTS:") + "\n")
 			count := 5
 			if len(m.BettercapLogs) < count {
 				count = len(m.BettercapLogs)
 			}
 			for i := len(m.BettercapLogs) - count; i < len(m.BettercapLogs); i++ {
-				sb.WriteString("  " + m.BettercapLogs[i] + "\n")
+				sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("  "+m.BettercapLogs[i]) + "\n")
 			}
 		}
 	} else {
@@ -1142,12 +1223,12 @@ func (m *Model) updateBettercapViewport() {
 
 		for i := start; i < end; i++ {
 			pkt := packets[i]
-			line := fmt.Sprintf("%-10s %-8s %-15s %-15s %-15s %-20s %d",
-				pkt.Timestamp.Format("15:04:05"), pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ProcessName, pkt.ISP, pkt.Length)
+			line := fmt.Sprintf("%-10s %-8s %-15s %-15s %-15s %-20s %-8s",
+				pkt.Timestamp.Format("15:04:05"), pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ProcessName, pkt.ISP, formatBytes(uint64(pkt.Length)))
 
 			style := lipgloss.NewStyle().MaxWidth(m.BettercapViewport.Width).MaxHeight(1)
 			if i == m.MITMSelectedIdx {
-				style = style.Background(lipgloss.Color("62")).Foreground(lipgloss.Color("230"))
+				style = style.Background(lipgloss.Color(m.getTheme().Primary)).Foreground(lipgloss.Color("230"))
 			} else if pkt.IsMalicious {
 				style = style.Foreground(lipgloss.Color("9"))
 			}
@@ -1172,6 +1253,11 @@ func (m *Model) updateGlobalViewport() {
 		m.GlobalSelectedIdx = len(packets) - 1
 	}
 
+	if len(packets) == 0 {
+		m.GlobalViewport.SetContent("\n\n  " + lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Primary)).Bold(true).Render("WAITING FOR GLOBAL TRAFFIC...") + "\n  Aggregate view of all local processes will appear here.")
+		return
+	}
+
 	numVisible := m.GlobalViewport.Height
 	start := 0
 	if len(packets) > numVisible {
@@ -1191,8 +1277,8 @@ func (m *Model) updateGlobalViewport() {
 
 	for i := start; i < end; i++ {
 		pkt := packets[i]
-		line := fmt.Sprintf("%-10s %-8s %-15s %-15s %-15s %-20s %d",
-			pkt.Timestamp.Format("15:04:05"), pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ProcessName, pkt.ISP, pkt.Length)
+		line := fmt.Sprintf("%-10s %-8s %-15s %-15s %-15s %-20s %-8s",
+			pkt.Timestamp.Format("15:04:05"), pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ProcessName, pkt.ISP, formatBytes(uint64(pkt.Length)))
 
 		style := lipgloss.NewStyle().MaxWidth(m.GlobalViewport.Width).MaxHeight(1)
 		if i == m.GlobalSelectedIdx {
@@ -1272,10 +1358,18 @@ func (m *Model) updateViewport() {
 
 	if p, ok := m.Processes[m.SelectedPid]; ok {
 		var buf strings.Builder
-		buf.WriteString(fmt.Sprintf("Traffic for %s (PID: %d)\n\n", p.Name, p.PID))
-		headerStyle := lipgloss.NewStyle().MaxWidth(m.Viewport.Width).MaxHeight(1)
-		buf.WriteString(headerStyle.Render(fmt.Sprintf("%-8s %-15s %-15s %-20s %-15s %s", "PROTO", "SOURCE", "DEST", "ISP", "SERVICE", "LEN")) + "\n")
-		buf.WriteString(strings.Repeat("-", m.Viewport.Width) + "\n")
+
+		titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary))
+		buf.WriteString(titleStyle.Render(fmt.Sprintf(" TRAFFIC: %s (PID %d) ", strings.ToUpper(p.Name), p.PID)) + "\n\n")
+
+		headerStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			Bold(true).
+			PaddingBottom(1)
+
+		headers := fmt.Sprintf("%-8s %-15s %-15s %-20s %-15s %s", "PROTO", "SOURCE", "DEST", "ISP", "SERVICE", "LEN")
+		buf.WriteString(headerStyle.Render(headers) + "\n")
+		buf.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("236")).Render(strings.Repeat("─", m.Viewport.Width)) + "\n")
 
 		filteredPackets := make([]types.PacketData, 0)
 		for _, pkt := range p.Packets {
@@ -1292,7 +1386,7 @@ func (m *Model) updateViewport() {
 		}
 
 		m.VisiblePackets = nil
-		for i := len(filteredPackets) - 1; i >= len(filteredPackets)-displayCount; i-- {
+		for idx, i := 0, len(filteredPackets)-1; i >= len(filteredPackets)-displayCount; i, idx = i-1, idx+1 {
 			pkt := filteredPackets[i]
 			m.VisiblePackets = append(m.VisiblePackets, pkt)
 
@@ -1303,9 +1397,12 @@ func (m *Model) updateViewport() {
 				info = pkt.HTTPMethod
 			}
 
-			line := fmt.Sprintf("%-8s %-15s %-15s %-20s %-15s %d", pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ISP, info, pkt.Length)
+			line := fmt.Sprintf("%-8s %-15s %-15s %-20s %-15s %-8s", pkt.Protocol, pkt.SrcIP, pkt.DstIP, pkt.ISP, info, formatBytes(uint64(pkt.Length)))
 			style := lipgloss.NewStyle().MaxWidth(m.Viewport.Width).MaxHeight(1)
-			if pkt.IsMalicious {
+
+			if idx == m.TrafficSelectedIdx {
+				style = style.Background(lipgloss.Color(m.getTheme().Primary)).Foreground(lipgloss.Color("230"))
+			} else if pkt.IsMalicious {
 				style = style.Foreground(lipgloss.Color("9"))
 			}
 			buf.WriteString(style.Render(line) + "\n")
@@ -1314,6 +1411,8 @@ func (m *Model) updateViewport() {
 		if m.AutoScroll {
 			m.Viewport.ScrollToEnd()
 		}
+	} else {
+		m.Viewport.SetContent("\n\n  " + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Select an application from the sidebar to view its traffic."))
 	}
 }
 
@@ -1359,7 +1458,7 @@ func (m *Model) View() string {
 	if m.Mode == LandingPageMode {
 		return m.renderLandingPage()
 	} else if m.Mode == PacketDetailMode {
-		return m.PacketDetailViewport.View()
+		return m.renderPacketDetailMode()
 	} else if m.Mode == HelpMode {
 		m.HelpViewport.SetContent(m.renderHelpMenuContent())
 		return m.HelpViewport.View()
@@ -1380,6 +1479,27 @@ func (m *Model) View() string {
 	m.List.PrimaryColor = m.getTheme().Primary
 	listRender := m.List.View()
 	viewportRender := m.Viewport.View()
+	topoRender := m.renderMiniTopology()
+
+	listContainer := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, true, false, false).
+		BorderForeground(lipgloss.Color("236")).
+		PaddingRight(2).
+		Render(listRender)
+
+	viewportContainer := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, true, false, false).
+		BorderForeground(lipgloss.Color("236")).
+		PaddingLeft(2).
+		PaddingRight(2).
+		Render(viewportRender)
+
+	topoContainer := lipgloss.NewStyle().
+		PaddingLeft(2).
+		Render(topoRender)
+
+	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, listContainer, viewportContainer, topoContainer)
+	mainContent = docStyle.Render(mainContent)
 
 	var bottomBar string
 	if m.Mode == FilterMode {
@@ -1441,44 +1561,146 @@ func (m *Model) View() string {
 	if bottomBar != "" {
 		footer = lipgloss.JoinVertical(lipgloss.Left, bottomBar, footer)
 	}
-
-	mainContent := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		docStyle.Render(listRender),
-		docStyle.Render(viewportRender),
-	)
-
 	return lipgloss.JoinVertical(lipgloss.Left, mainContent, footer)
 }
 
-func (m *Model) renderCategorySelection() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).Render("Select Process Category")
+func (m *Model) renderMiniTopology() string {
+	m.Mu.RLock()
+	p, ok := m.Processes[m.SelectedPid]
+	m.Mu.RUnlock()
 
-	var sb strings.Builder
-	for i, cat := range m.CategoryList {
-		cursor := "  "
-		style := lipgloss.NewStyle()
-		if i == m.CategoryCursor {
-			cursor = "> "
-			style = style.Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true)
-		}
-		sb.WriteString(cursor + style.Render(cat) + "\n")
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Accent))
+	header := titleStyle.Render("▣ DESTINATIONS") + "\n"
+	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("236")).Render(strings.Repeat("─", 20)) + "\n"
+
+	if !ok || len(p.Packets) == 0 {
+		return header + divider + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("No active\nconnections")
 	}
 
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[j/k] Navigate • [Enter] Select • [Esc] Back")
+	counts := make(map[string]int)
+	for _, pkt := range p.Packets {
+		dest := pkt.ISP
+		if dest == "" || dest == "Unknown" {
+			dest = pkt.DstIP
+		}
+		counts[dest]++
+	}
 
-	content := lipgloss.JoinVertical(lipgloss.Center, title, "\n", sb.String(), help)
-	return landingPageStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Width(m.Width - 4).Height(m.Height - 2).Render(content)
+	type destStat struct {
+		name  string
+		count int
+	}
+	var stats []destStat
+	for k, v := range counts {
+		stats = append(stats, destStat{k, v})
+	}
+	sort.Slice(stats, func(i, j int) bool { return stats[i].count > stats[j].count })
+
+	var sb strings.Builder
+	sb.WriteString(header)
+	sb.WriteString(divider)
+
+	limit := 8
+	if len(stats) < limit {
+		limit = len(stats)
+	}
+	for i := 0; i < limit; i++ {
+		name := stats[i].name
+		if len(name) > 18 {
+			name = name[:15] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("%-18s %d\n", name, stats[i].count))
+	}
+	return sb.String()
+}
+
+func (m *Model) renderCategorySelection() string {
+	theme := m.getTheme()
+	primary := lipgloss.Color(theme.Primary)
+	accent := lipgloss.Color(theme.Accent)
+
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(primary).
+		Background(lipgloss.Color("236")).
+		Padding(0, 3).
+		Render(" PROCESS CATEGORIES ")
+
+	icons := map[string]string{
+		"Communication": "💬",
+		"Browsers":      "🌐",
+		"VPN & Privacy": "🔒",
+		"System":        "⚙️",
+		"Other":         "📦",
+		"All Traffic":   "🦈",
+	}
+
+	var cards []string
+	for i, cat := range m.CategoryList {
+		icon := icons[cat]
+		style := lipgloss.NewStyle().
+			Width(30).
+			Height(3).
+			Padding(1, 0).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("238")).
+			Align(lipgloss.Center)
+
+		if i == m.CategoryCursor {
+			style = style.BorderForeground(accent).Foreground(accent).Bold(true)
+		}
+		cards = append(cards, style.Render(fmt.Sprintf("%s %s", icon, strings.ToUpper(cat))))
+	}
+
+	row1 := lipgloss.JoinHorizontal(lipgloss.Top, cards[0], "  ", cards[1])
+	row2 := lipgloss.JoinHorizontal(lipgloss.Top, cards[2], "  ", cards[3])
+	row3 := lipgloss.JoinHorizontal(lipgloss.Top, cards[4], "  ", cards[5])
+
+	grid := lipgloss.JoinVertical(lipgloss.Center, row1, row2, row3)
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[WASD/Arrows] Navigate • [Enter] Select • [Esc] Back")
+
+	content := lipgloss.JoinVertical(lipgloss.Center, title, "\n", grid, help)
+	return landingPageStyle.Copy().BorderForeground(primary).Width(m.Width - 4).Height(m.Height - 2).Render(content)
+}
+
+func (m *Model) handleSettingsAction() {
+	switch m.SettingsCursor {
+	case 0:
+		m.UseAI = !m.UseAI
+	case 1:
+		if len(m.AvailableModels) > 0 {
+			m.SelectedModelIdx = (m.SelectedModelIdx + 1) % len(m.AvailableModels)
+		}
+	case 2:
+		m.UseMITMSetting = !m.UseMITMSetting
+	case 3:
+		m.MITMJunkFilter = !m.MITMJunkFilter
+	case 4:
+		m.AutoScroll = !m.AutoScroll
+	case 5:
+		m.SortMode = (m.SortMode + 1) % 3
+		m.refreshList()
+	case 6:
+		m.SelectedThemeIdx = (m.SelectedThemeIdx + 1) % len(Themes)
+	case 7:
+		m.Mode = NormalMode
+	}
 }
 
 func (m *Model) renderSettingsMode() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).Render(" Ligmashark Settings ")
+	title := lipgloss.NewStyle().Bold(true).
+		Foreground(lipgloss.Color(m.getTheme().Primary)).
+		Background(lipgloss.Color("236")).
+		Padding(0, 3).Render(" LIGMASHARK SETTINGS ")
 
 	options := []string{
-		fmt.Sprintf("AI Analysis:    %s", m.toggleLabel(m.UseAI)),
-		fmt.Sprintf("AI Model:       %s", m.getSelectedModelName()),
-		fmt.Sprintf("MITM Features:  %s", m.toggleLabel(m.UseMITMSetting)),
-		fmt.Sprintf("Theme:          %s", m.getTheme().Name),
+		fmt.Sprintf("AI Analysis      %s", m.toggleLabel(m.UseAI)),
+		fmt.Sprintf("AI Model         %s", m.getSelectedModelName()),
+		fmt.Sprintf("MITM Logic       %s", m.toggleLabel(m.UseMITMSetting)),
+		fmt.Sprintf("MITM Junk Filter %s", m.toggleLabel(m.MITMJunkFilter)),
+		fmt.Sprintf("Auto-Scroll      %s", m.toggleLabel(m.AutoScroll)),
+		fmt.Sprintf("Default Sort     %s", m.getSortModeName()),
+		fmt.Sprintf("Theme            %s", m.getTheme().Name),
 		"Back to Monitor",
 	}
 
@@ -1496,6 +1718,17 @@ func (m *Model) renderSettingsMode() string {
 	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[j/k] Navigate • [h/l] Cycle Option • [Enter] Select • [S/Esc] Exit")
 	content := lipgloss.JoinVertical(lipgloss.Center, title, "\n", sb.String(), help)
 	return landingPageStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Width(m.Width - 4).Height(m.Height - 2).Render(content)
+}
+
+func (m *Model) getSortModeName() string {
+	switch m.SortMode {
+	case 1:
+		return "PID"
+	case 2:
+		return "Name"
+	default:
+		return "Packet Count"
+	}
 }
 
 func (m *Model) getSelectedModelName() string {
@@ -1528,45 +1761,97 @@ func (m *Model) toggleCaptureCmd() tea.Cmd {
 	return func() tea.Msg { return PauseCaptureMsg{} }
 }
 
-func (m *Model) getPacketDetailContent() string {
-	width := m.PacketDetailViewport.Width
-	style := lipgloss.NewStyle().Width(width)
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).Render("Packet Overview")
+func (m *Model) renderPacketDetailMode() string {
+	title := lipgloss.NewStyle().Bold(true).
+		Foreground(lipgloss.Color(m.getTheme().Primary)).
+		Background(lipgloss.Color("236")).
+		Padding(0, 3).Render(" PACKET INSPECTION ")
 
-	aiText := m.InspectedPacket.AIAnalysis
-	if aiText == "" {
-		aiText = "Analyzing payload with qwen2.5:0.5b..."
-	}
-
-	maliciousStatus := "No"
-	if m.InspectedPacket.IsMalicious {
-		maliciousStatus = "YES (Detected by ThreatFox)"
-	}
-
-	details := fmt.Sprintf(
-		"Timestamp: %s\nProtocol:  %s\nLength:    %d bytes\nMalicious: %s\n\n"+
-			"Source:      %s:%s\nDestination: %s:%s\nISP:         %s\n\n"+
-			"AI Analysis (qwen2.5:0.5b):\n%s\n\n"+
-			"Payload:\n%s",
-		m.InspectedPacket.Timestamp.Format("15:04:05.000"),
-		m.InspectedPacket.Protocol,
-		m.InspectedPacket.Length,
-		maliciousStatus,
-		m.InspectedPacket.SrcIP, m.InspectedPacket.SrcPort,
-		m.InspectedPacket.DstIP, m.InspectedPacket.DstPort,
-		m.InspectedPacket.ISP,
-		aiText,
-		m.InspectedPacket.Payload,
-	)
+	m.PacketDetailViewport.UpdateContent(m.getPacketDetailContent())
 
 	exportStatus := ""
 	if m.ExportStatus != "" {
-		exportStatus = lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render("\n" + m.ExportStatus)
+		exportStatus = lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Bold(true).Render(" | " + m.ExportStatus)
 	}
 
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[E] Export Report • [Mouse Wheel] Scroll • [Esc/q] Back")
-	content := lipgloss.JoinVertical(lipgloss.Left, title, style.Render(details), exportStatus, help)
-	return content
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[E] Export Report • [Mouse Wheel] Scroll • [Esc/q] Back" + exportStatus)
+	content := lipgloss.JoinVertical(lipgloss.Center, title, "\n", m.PacketDetailViewport.View(), help)
+
+	return landingPageStyle.Copy().
+		BorderForeground(lipgloss.Color(m.getTheme().Primary)).
+		Width(m.Width - 4).
+		Height(m.Height - 2).
+		Render(content)
+}
+
+func (m *Model) getPacketDetailContent() string {
+	width := m.PacketDetailViewport.Width
+
+	sectionHeader := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.getTheme().Accent)).
+		Bold(true).
+		PaddingTop(1)
+
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Width(15)
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
+
+	metadata := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Timestamp:"), valueStyle.Render(m.InspectedPacket.Timestamp.Format("15:04:05.000"))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Protocol:"), valueStyle.Render(m.InspectedPacket.Protocol)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Process:"), valueStyle.Render(fmt.Sprintf("%s (PID: %d)", m.InspectedPacket.ProcessName, m.InspectedPacket.PID))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Length:"), valueStyle.Render(formatBytes(uint64(m.InspectedPacket.Length)))),
+	)
+
+	maliciousValue := valueStyle.Render("No")
+	if m.InspectedPacket.IsMalicious {
+		maliciousValue = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true).Render("YES (Detected by ThreatFox)")
+	}
+	metadata = lipgloss.JoinVertical(lipgloss.Left, metadata,
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Malicious:"), maliciousValue))
+
+	networkInfo := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Source:"), valueStyle.Render(fmt.Sprintf("%s:%s", m.InspectedPacket.SrcIP, m.InspectedPacket.SrcPort))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Destination:"), valueStyle.Render(fmt.Sprintf("%s:%s", m.InspectedPacket.DstIP, m.InspectedPacket.DstPort))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("ISP/Org:"), valueStyle.Render(m.InspectedPacket.ISP)),
+	)
+
+	aiText := m.InspectedPacket.AIAnalysis
+	var renderedAI string
+	if aiText == "" {
+		renderedAI = lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("241")).Render("Analyzing payload with AI...")
+	} else {
+		renderedAI = m.renderMarkdown(aiText, width)
+	}
+	var sb strings.Builder
+	sb.WriteString(sectionHeader.Render("▣ METADATA") + "\n")
+	sb.WriteString(metadata + "\n")
+	sb.WriteString(sectionHeader.Render("▣ NETWORK CONTEXT") + "\n")
+	sb.WriteString(networkInfo + "\n")
+	sb.WriteString(sectionHeader.Render("▣ AI ANALYSIS ("+m.getSelectedModelName()+")") + "\n")
+	sb.WriteString(renderedAI + "\n")
+	sb.WriteString(sectionHeader.Render("▣ RAW PAYLOAD") + "\n")
+	sb.WriteString(m.InspectedPacket.Payload + "\n")
+
+	return sb.String()
+}
+
+func (m *Model) renderMarkdown(input string, width int) string {
+	boldStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary))
+	var result strings.Builder
+	parts := strings.Split(input, "**")
+
+	for i, part := range parts {
+		if i%2 == 1 && i < len(parts)-1 {
+			result.WriteString(boldStyle.Render(part))
+		} else {
+			if i%2 == 1 && i == len(parts)-1 {
+				result.WriteString("**" + part)
+			} else {
+				result.WriteString(part)
+			}
+		}
+	}
+	return lipgloss.NewStyle().Width(width).Render(result.String())
 }
 
 type ProcessFilter int
@@ -1762,9 +2047,21 @@ func (m *Model) renderLandingPage() string {
 		MarginTop(1).
 		Render("⚠️ LEGAL DISCLAIMER: Use MITM features responsibly. Intercepting traffic on networks\nyou do not own or have explicit permission to audit is illegal and unethical.")
 
-	desc := lipgloss.NewStyle().Width(70).Align(lipgloss.Center).MarginTop(1).Render(
-		"A high-performance TUI network analyzer with local AI-powered packet inspection.\n" +
-			"Map connections to processes, analyze ISPs, and assemble streams in real-time.")
+	desc := lipgloss.NewStyle().Width(75).Align(lipgloss.Center).MarginTop(1).Render(
+		"Traditional sniffers show you packets, but Ligmashark shows you the application responsible.\n" +
+			"By mapping capture data to local processes, it provides unprecedented visibility into your stack.")
+
+	featureStyle := lipgloss.NewStyle().Foreground(accent).Bold(true)
+	featureBox := lipgloss.NewStyle().
+		Width(70).
+		Align(lipgloss.Left).
+		MarginTop(1).
+		Render(lipgloss.JoinVertical(lipgloss.Left,
+			featureStyle.Render("KEY FEATURES:"),
+			"• "+lipgloss.NewStyle().Bold(true).Render("Process Visibility:")+" Real-time mapping of packets to binaries and PIDs.",
+			"• "+lipgloss.NewStyle().Bold(true).Render("AI Intelligence:")+" Payload explanation via local Ollama models (offline).",
+			"• "+lipgloss.NewStyle().Bold(true).Render("Automation Engine:")+" Scriptable triggers and responses with SharkScript.",
+			"• "+lipgloss.NewStyle().Bold(true).Render("Threat Intelligence:")+" IOC matching to flag malicious traffic instantly."))
 
 	infoKeyStyle := lipgloss.NewStyle().Foreground(accent).Bold(true)
 	infoValStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
@@ -1790,6 +2087,7 @@ func (m *Model) renderLandingPage() string {
 		title,
 		author,
 		desc,
+		featureBox,
 		specs,
 		disclaimer,
 		ollama,
@@ -1825,63 +2123,85 @@ func (m *Model) renderGlobalTrafficMode() string {
 }
 
 func (m *Model) renderBettercapMode() string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("160")).Padding(0, 1).Background(lipgloss.Color("235"))
-	title := titleStyle.Render(" Ligmashark MITM (Powered by Bettercap) ")
+	theme := m.getTheme()
+	primary := lipgloss.Color(theme.Primary)
+	accent := lipgloss.Color(theme.Accent)
 
-	statusColor := "241"
-	statusText := "INACTIVE"
-	if network.IsMITMActive() {
-		statusColor = "42"
-		statusText = "ACTIVE"
-	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(primary).PaddingLeft(1).Render("Ligmashark MITM (Powered by Bettercap)")
 
-	status := lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor)).Bold(true).Render("● " + statusText)
-	iface := lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Render("Interface: " + m.InterfaceName)
-
-	header := lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", status, "  ", iface)
+	labelStyle := lipgloss.NewStyle().Foreground(accent).Bold(true)
+	valStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 
 	junkStatus := "OFF"
 	if m.MITMJunkFilter {
 		junkStatus = "ON"
 	}
 
-	filterInfo := lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Render(fmt.Sprintf(
-		" [X] Junk Filter: %s | [F] Protocol: %s ", junkStatus, m.MITMProtocolFilter))
+	statusParts := []string{
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("IFACE: "), valStyle.Render(m.InterfaceName)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("JUNK: "), valStyle.Render(junkStatus)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("PROTO: "), valStyle.Render(m.MITMProtocolFilter)),
+	}
 
-	searchBar := ""
 	if m.MITMSearchActive || m.MITMSearchInput != "" {
 		cursor := " "
 		if m.CursorVisible && m.MITMSearchActive {
 			cursor = "█"
 		}
-		searchBar = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render(" / Search: " + m.MITMSearchInput + cursor)
+		statusParts = append(statusParts, lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("SEARCH: "), valStyle.Render(m.MITMSearchInput+cursor)))
 	}
 
-	description := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true).Render("Intercepting network traffic via ARP Spoofing")
+	statusLine := lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(statusParts, "  │  "))
+	header := lipgloss.JoinVertical(lipgloss.Left, title, statusLine)
 
-	controls := lipgloss.JoinHorizontal(lipgloss.Center, filterInfo, searchBar)
+	sidebarWidth := 24
+	sidebarContent := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Foreground(accent).Bold(true).PaddingTop(1).Render("▣ HOW IT WORKS"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Width(sidebarWidth-2).Render(
+			"Ligmashark leverages Bettercap to perform ARP spoofing. By convincing devices on your network that this machine is the router, all traffic flows through us before reaching the gateway."),
+		"\n",
+		lipgloss.NewStyle().Foreground(accent).Bold(true).Render("▣ STATUS"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Intercepting..."),
+	)
+
+	sidebar := lipgloss.NewStyle().
+		Width(sidebarWidth).
+		Border(lipgloss.NormalBorder(), false, true, false, false).
+		BorderForeground(lipgloss.Color("236")).
+		PaddingRight(1).
+		Render(sidebarContent)
 
 	tableHeader := lipgloss.NewStyle().Foreground(lipgloss.Color("249")).Bold(true).Render(
 		fmt.Sprintf("  %-10s %-8s %-15s %-15s %-15s %-20s %s", "TIME", "PROTO", "SOURCE", "DEST", "PROCESS", "ISP", "LEN"))
 
+	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("236")).Render(strings.Repeat("─", m.Width-sidebarWidth-10))
+
 	exportStatus := ""
 	if m.ExportStatus != "" {
-		exportStatus = " | " + lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render(m.ExportStatus)
+		exportStatus = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" | " + m.ExportStatus)
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		description,
-		controls,
-		"\n",
+	// Adjust viewport size for the new layout
+	m.BettercapViewport.Width = m.Width - sidebarWidth - 10
+	m.BettercapViewport.Height = m.Height - 14
+
+	tableArea := lipgloss.JoinVertical(lipgloss.Left,
 		tableHeader,
-		lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, true, false).BorderForeground(lipgloss.Color("237")).Width(m.Width-4).Render(""),
+		divider,
 		m.BettercapViewport.View(),
 	)
 
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("[j/k] Scroll • [Enter] Inspect • [X] Junk • [F] Proto • [/] Search • [C] Clear • [E] Export • [Esc] Back" + exportStatus)
+	mainArea := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, "  ", tableArea)
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[j/k] Scroll • [Enter] Inspect • [X] Junk • [F] Proto • [/] Search • [E] Export • [Esc] Back" + exportStatus)
 
-	return docStyle.Render(lipgloss.JoinVertical(lipgloss.Left, content, "\n", help))
+	content := lipgloss.JoinVertical(lipgloss.Left, header, "\n", mainArea, help)
+
+	return landingPageStyle.Copy().
+		Align(lipgloss.Left).
+		BorderForeground(primary).
+		Width(m.Width - 4).
+		Height(m.Height - 2).
+		Render(content)
 }
 
 func isJunkPacket(pkt types.PacketData) bool {
@@ -2063,10 +2383,11 @@ func (m *Model) renderNetworkTopology() string {
 		mainMap = "\n    (No active connections discovered yet)\n"
 	}
 
+	m.TopologyViewport.UpdateContent(mainMap)
+
 	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("\n[n/q/Esc] Return to Dashboard")
-	return landingPageStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Width(m.Width - 4).Height(m.Height - 2).Render(
-		lipgloss.JoinVertical(lipgloss.Center, title, "\n", mainMap, help),
-	)
+	content := lipgloss.JoinVertical(lipgloss.Center, title, "\n", m.TopologyViewport.View(), help)
+	return landingPageStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Width(m.Width - 4).Height(m.Height - 2).Render(content)
 }
 
 type CustomList struct {
@@ -2138,32 +2459,64 @@ func (cl *CustomList) Update(msg tea.Msg) {
 
 func (cl CustomList) View() string {
 	var sb strings.Builder
-	sb.WriteString(lipgloss.NewStyle().Bold(true).Render(cl.title) + "\n")
-	sb.WriteString(strings.Repeat("-", cl.Width) + "\n")
+
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(cl.getPrimary()))
+	sb.WriteString(headerStyle.Render(fmt.Sprintf(" %s", cl.title)) + "\n")
+
+	colHeaderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Bold(true)
+	nameW := cl.Width - 26
+	if nameW < 10 {
+		nameW = 10
+	}
+
+	headers := lipgloss.JoinHorizontal(lipgloss.Left,
+		"  ",
+		colHeaderStyle.Width(nameW).Render("APPLICATION"),
+		colHeaderStyle.Width(6).Align(lipgloss.Right).Render("PID"),
+		colHeaderStyle.Width(8).Align(lipgloss.Right).Render("PKTS"),
+		colHeaderStyle.Width(10).Align(lipgloss.Right).Render("DATA"),
+	)
+	sb.WriteString(headers + "\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("236")).Render(strings.Repeat("─", cl.Width)) + "\n")
 
 	start := 0
-	if cl.selected >= cl.Height-2 {
-		start = cl.selected - (cl.Height - 3)
+	if cl.selected >= cl.Height-3 {
+		start = cl.selected - (cl.Height - 4)
 	}
 	if start < 0 {
 		start = 0
 	}
 
-	end := start + cl.Height - 2
+	end := start + cl.Height - 3
 	if end > len(cl.items) {
 		end = len(cl.items)
 	}
 
 	for i := start; i < end; i++ {
 		item := cl.items[i]
-		line := fmt.Sprintf("%s (%d) [%d]", item.Name, item.PID, len(item.Packets))
-		style := lipgloss.NewStyle().MaxWidth(cl.Width).MaxHeight(1)
-		if item.IsMalicious {
+		indicator := "  "
+		style := lipgloss.NewStyle().Width(cl.Width).MaxHeight(1)
+
+		if i == cl.selected {
+			indicator = "> "
+			style = style.Background(lipgloss.Color(cl.getPrimary())).Foreground(lipgloss.Color("230"))
+		} else if item.IsMalicious {
 			style = style.Foreground(lipgloss.Color("9"))
 		}
-		if i == cl.selected {
-			style = style.Background(lipgloss.Color(cl.getPrimary())).Foreground(lipgloss.Color("230"))
+
+		name := item.Name
+		if len(name) > nameW {
+			name = name[:nameW-3] + "..."
 		}
+
+		line := fmt.Sprintf("%s%-*s%6d%8d%10s",
+			indicator,
+			nameW, name,
+			item.PID,
+			len(item.Packets),
+			formatBytes(item.BytesIn+item.BytesOut),
+		)
+
 		sb.WriteString(style.Render(line) + "\n")
 	}
 	return sb.String()
@@ -2182,7 +2535,6 @@ func NewCustomViewport() CustomViewport {
 
 func (cv *CustomViewport) SetContent(content string) {
 	cv.content = content
-	cv.scrollOffset = 0
 }
 
 func (cv *CustomViewport) UpdateContent(content string) {
