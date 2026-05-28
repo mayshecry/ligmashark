@@ -1067,7 +1067,7 @@ func (m *Model) exportPacketCmd(pkt types.PacketData) tea.Cmd {
 
 		sb.WriteString("RAW PAYLOAD\n")
 		sb.WriteString("-----------\n")
-		sb.WriteString(pkt.Payload)
+		sb.WriteString(hex.Dump(pkt.Payload))
 		sb.WriteString("\n")
 
 		err := os.WriteFile(filename, []byte(sb.String()), 0644)
