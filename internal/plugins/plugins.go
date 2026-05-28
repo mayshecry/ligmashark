@@ -89,7 +89,7 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 		case "TIMER_START":
 			s.timerStart = time.Now()
 		case "TIMER_END":
-			s.vars[ins.Value] = fmt.Sprintf("%.4f", time.Since(s.timerStart).Seconds())
+			s.vars[ins.Value] = strconv.FormatFloat(time.Since(s.timerStart).Seconds(), 'f', 4, 64)
 		case "SET":
 			s.vars[ins.Value] = msg
 		case "SET_EXPR":
@@ -329,53 +329,68 @@ func (s *ScriptPlugin) handleAction(op, message, value string, pkt *types.Packet
 
 func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
 	expr = s.expandVars(expr)
-	orParts := strings.Split(expr, " OR ")
-	if len(orParts) > 1 {
-		for _, part := range orParts {
-			if s.evalLogic(strings.TrimSpace(part), pkt) {
-				return true
+
+	// 1. Handle OR conditions first (short-circuiting)
+	// Check for presence first to avoid Split allocation if not present
+	if strings.Contains(expr, " OR ") {
+		orParts := strings.Split(expr, " OR ")
+		if len(orParts) > 1 {
+			for _, part := range orParts {
+				if s.evalLogic(strings.TrimSpace(part), pkt) {
+					return true
+				}
 			}
+			return false
 		}
-		return false
 	}
 
-	andParts := strings.Split(expr, " AND ")
-	if len(andParts) > 1 {
-		for _, part := range andParts {
-			if !s.evalLogic(strings.TrimSpace(part), pkt) {
-				return false
+	// 2. Handle AND conditions (short-circuiting)
+	// Check for presence first to avoid Split allocation if not present
+	if strings.Contains(expr, " AND ") {
+		andParts := strings.Split(expr, " AND ")
+		if len(andParts) > 1 {
+			for _, part := range andParts {
+				if !s.evalLogic(strings.TrimSpace(part), pkt) {
+					return false
+				}
 			}
+			return true
 		}
-		return true
 	}
 
-	cond := strings.ToUpper(expr)
-	if cond == "MALICIOUS" || expr == "malicious" {
+	// 3. Handle simple numeric comparisons (most common in loops)
+	// Use strings.Index and slicing instead of Split for fewer allocations
+	if idx := strings.Index(expr, " < "); idx != -1 {
+		leftStr := strings.TrimSpace(expr[:idx])
+		rightStr := strings.TrimSpace(expr[idx+3:]) // " < " is 3 chars
+		left, err1 := strconv.Atoi(leftStr)
+		right, err2 := strconv.Atoi(rightStr)
+		return err1 == nil && err2 == nil && left < right
+	}
+	if idx := strings.Index(expr, " > "); idx != -1 {
+		leftStr := strings.TrimSpace(expr[:idx])
+		rightStr := strings.TrimSpace(expr[idx+3:])
+		left, err1 := strconv.Atoi(leftStr)
+		right, err2 := strconv.Atoi(rightStr)
+		return err1 == nil && err2 == nil && left > right
+	}
+
+	// 4. Handle MALICIOUS (case-insensitive)
+	if strings.EqualFold(expr, "MALICIOUS") {
 		return pkt.IsMalicious
 	}
-	if strings.HasPrefix(cond, "PROTO ") {
+
+	// 5. Handle other conditions that might require prefix checks
+	// Only perform ToUpper on the prefix if needed, to avoid full string allocation
+	if len(expr) >= 6 && strings.ToUpper(expr[:6]) == "PROTO " {
 		f := strings.Fields(expr)
 		if len(f) > 1 {
 			return strings.EqualFold(pkt.Protocol, f[1])
 		}
 	}
-	if strings.HasPrefix(cond, "CONTAINS ") {
+	if len(expr) >= 9 && strings.ToUpper(expr[:9]) == "CONTAINS " {
 		searchStr := strings.Trim(expr[9:], "\" ")
 		return strings.Contains(pkt.Payload, searchStr)
-	}
-
-	// Numeric comparisons for counting
-	if strings.Contains(expr, " < ") {
-		parts := strings.Split(expr, " < ")
-		left, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
-		right, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
-		return left < right
-	}
-	if strings.Contains(expr, " > ") {
-		parts := strings.Split(expr, " > ")
-		left, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
-		right, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
-		return left > right
 	}
 
 	if strings.Contains(expr, ".") {
