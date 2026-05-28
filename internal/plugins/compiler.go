@@ -56,15 +56,28 @@ func Compile(srcPath string) error {
 			continue
 		}
 
+		if cmd == "PARALLEL" && len(parts) > 1 && strings.ToUpper(parts[1]) == "LOOP" {
+			if len(parts) < 3 {
+				return fmt.Errorf("line %d: PARALLEL LOOP requires a count", lineNum)
+			}
+			stack = append(stack, []instruction{})
+			ctrlStack = append(ctrlStack, control{op: "PARALLEL_LOOP", val: parts[2]})
+			continue
+		}
+
 		if cmd == "ENDLOOP" {
-			if len(ctrlStack) == 0 || ctrlStack[len(ctrlStack)-1].op != "LOOP" {
+			if len(ctrlStack) == 0 || (ctrlStack[len(ctrlStack)-1].op != "LOOP" && ctrlStack[len(ctrlStack)-1].op != "PARALLEL_LOOP") {
 				return fmt.Errorf("line %d: ENDLOOP without LOOP", lineNum)
 			}
 			body := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
 			ctrl := ctrlStack[len(ctrlStack)-1]
 			ctrlStack = ctrlStack[:len(ctrlStack)-1]
-			stack[len(stack)-1] = append(stack[len(stack)-1], instruction{Op: OpLoop, Value: ctrl.val, Body: body})
+			op := OpLoop
+			if ctrl.op == "PARALLEL_LOOP" {
+				op = OpParallelLoop
+			}
+			stack[len(stack)-1] = append(stack[len(stack)-1], instruction{Op: op, Value: ctrl.val, Body: body})
 			continue
 		}
 

@@ -70,6 +70,7 @@ const (
 	OpIfExec
 	OpIfPost
 	OpIfBreak
+	OpParallelLoop
 )
 
 type instruction struct {
@@ -191,6 +192,13 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			s.vars[ins.Value] = strconv.Itoa(iv + 1)
 			s.mu.Unlock()
 		case OpLoop:
+			count, _ := strconv.Atoi(s.expandVars(ins.Value))
+			for i := 0; i < count; i++ {
+				if s.execute(ins.Body, pkt) {
+					return true
+				}
+			}
+		case OpParallelLoop:
 			count, _ := strconv.Atoi(s.expandVars(ins.Value))
 			var wg sync.WaitGroup
 			for i := 0; i < count; i++ {
