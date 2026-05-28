@@ -18,8 +18,55 @@ import (
 	"ligmashark/internal/types"
 )
 
+type OpCode uint8
+
+const (
+	OpNop OpCode = iota
+	OpUse
+	OpTimerStart
+	OpTimerEnd
+	OpSet
+	OpSetExpr
+	OpSetHeader
+	OpGetHeader
+	OpGetISP
+	OpTime
+	OpBreak
+	OpIncrement
+	OpLoop
+	OpWhile
+	OpBased
+	OpSlop
+	OpTelemetry
+	OpHate
+	OpRejectMS
+	OpBashKill
+	OpNuke
+	OpDropAll
+	OpRedirect
+	OpSpoof
+	OpAlert
+	OpExec
+	OpInput
+	OpPost
+	OpIfComplex
+	OpSleep
+	OpCall
+	OpPrint
+	OpLog
+	OpFetch
+	OpIfMalicious
+	OpIfProto
+	OpIfExt
+	OpIfExtCall
+	OpIfMaliciousCall
+	OpElse
+	OpBlock
+	OpIfMaliciousBlock
+)
+
 type instruction struct {
-	Op      string
+	Op      OpCode
 	Value   string
 	Message string
 	Body    []instruction
@@ -67,8 +114,7 @@ func (s *ScriptPlugin) OnPacket(pkt *types.PacketData) {
 func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool {
 	lastIfMet := false
 	for _, ins := range insts {
-		op := ins.Op
-		if op == "WHILE" {
+		if ins.Op == OpWhile {
 			for s.evalLogic(s.expandVars(ins.Value), pkt) {
 				if s.execute(ins.Body, pkt) {
 					break
@@ -77,79 +123,79 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			continue
 		}
 
-		switch op {
-		case "USE":
+		switch ins.Op {
+		case OpUse:
 			s.imports[ins.Value] = true
-		case "TIMER_START":
+		case OpTimerStart:
 			s.timerStart = time.Now()
-		case "TIMER_END":
+		case OpTimerEnd:
 			s.vars[ins.Value] = strconv.FormatFloat(time.Since(s.timerStart).Seconds(), 'f', 4, 64)
-		case "SET":
+		case OpSet:
 			s.vars[ins.Value] = s.expandVars(ins.Message)
-		case "SET_EXPR":
+		case OpSetExpr:
 			s.vars[ins.Value] = s.evalMath(s.expandVars(ins.Message))
-		case "SET_HEADER":
+		case OpSetHeader:
 			s.headers[s.expandVars(ins.Value)] = s.expandVars(ins.Message)
-		case "GET_HEADER":
+		case OpGetHeader:
 			s.vars[ins.Message] = pkt.HTTPHeaders[s.expandVars(ins.Value)]
-		case "GET_ISP":
+		case OpGetISP:
 			s.vars[ins.Message] = network.GetISP(s.expandVars(ins.Value))
-		case "TIME":
+		case OpTime:
 			s.vars[ins.Value] = strconv.FormatInt(time.Now().UnixMilli(), 10)
-		case "BREAK":
+		case OpBreak:
 			return true
-		case "INCREMENT":
+		case OpIncrement:
 			curr := s.vars[ins.Value]
 			if curr == "" {
 				curr = "0"
 			}
 			iv, _ := strconv.Atoi(curr)
 			s.vars[ins.Value] = strconv.Itoa(iv + 1)
-		case "LOOP":
+		case OpLoop:
 			count, _ := strconv.Atoi(s.expandVars(ins.Value))
 			for i := 0; i < count; i++ {
 				if s.execute(ins.Body, pkt) {
 					break
 				}
 			}
-		case "BASED":
+		case OpBased:
 			fmt.Printf("[%s] 🗿 BASED: %s\n", s.Name(), s.expandVars(ins.Message))
-		case "SLOP":
+		case OpSlop:
 			fmt.Printf("[%s] 🤮 SLOP DETECTED: %s\n", s.Name(), s.expandVars(ins.Message))
-		case "TELEMETRY_DETECTED":
+		case OpTelemetry:
 			fmt.Printf("[%s] 📡 TELEMETRY DETECTED: %s\n", s.Name(), s.expandVars(ins.Message))
-		case "HATE":
+		case OpHate:
 			fmt.Printf("[%s] 💢 HATE: %s\n", s.Name(), strings.ToUpper(s.expandVars(ins.Message)))
-		case "REJECT_MICROSOFT":
+		case OpRejectMS:
 			if strings.Contains(strings.ToLower(pkt.ISP), "microsoft") {
 				s.killProcess(pkt)
 				fmt.Printf("[%s] 🚫 REJECTED MICROSOFT CONNECTION (PID: %d)\n", s.Name(), pkt.PID)
 			}
-		case "BashKILL_PID":
+		case OpBashKill:
 			if pkt.PID > 0 {
 				exec.Command("kill", "-9", fmt.Sprintf("%d", pkt.PID)).Run()
 				fmt.Printf("[%s] 💀 BashKILL: Sent SIGKILL to PID %d\n", s.Name(), pkt.PID)
 			}
-		case "NUKE_CONNECTION":
+		case OpNuke:
 			s.killProcess(pkt)
 			fmt.Printf("[%s] ☢️  NUKED connection from %s\n", s.Name(), pkt.ProcessName)
-		case "DROP_ALL_PACKETS":
+		case OpDropAll:
 			fmt.Printf("[%s] 🚮 DROPPING packet from %s (Internal State Only)\n", s.Name(), pkt.SrcIP)
-		case "REDIRECT":
+		case OpRedirect:
 			expandedVal := s.expandVars(ins.Value)
 			if v, err := strconv.Atoi(expandedVal); err == nil {
 				pkt.DstPort = strconv.Itoa(v)
 				fmt.Printf("[%s] 🔄 REDIRECTED to port %s\n", s.Name(), expandedVal)
 			}
-		case "SPOOF":
+		case OpSpoof:
 			expandedVal := s.expandVars(ins.Value)
 			pkt.SrcIP = expandedVal
 			fmt.Printf("[%s] 🎭 SPOOFED Source IP to %s\n", s.Name(), expandedVal)
-		case "ALERT":
+		case OpAlert:
 			alertStyle := "\033[1;31m" // Bold Red
 			reset := "\033[0m"
 			fmt.Printf("[%s] %s🚨 ALERT: %s%s\n", s.Name(), alertStyle, s.expandVars(ins.Message), reset)
-		case "EXEC":
+		case OpExec:
 			expandedMsg := s.expandVars(ins.Message)
 			var cmd *exec.Cmd
 			if runtime.GOOS == "windows" {
@@ -159,12 +205,12 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			}
 			go cmd.Run()
 			fmt.Printf("[%s] 🚀 EXEC: %s\n", s.Name(), expandedMsg)
-		case "INPUT":
+		case OpInput:
 			fmt.Printf("[%s] %s", s.Name(), s.expandVars(ins.Message))
 			var inputVal string
 			fmt.Scanln(&inputVal)
 			s.vars[ins.Value] = strings.TrimSpace(inputVal)
-		case "POST":
+		case OpPost:
 			parts := strings.SplitN(s.expandVars(ins.Message), " ", 2)
 			if len(parts) == 2 {
 				url, body := parts[0], parts[1]
@@ -187,53 +233,53 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 					}
 				}(url, body, s.headers)
 			}
-		case "IF_COMPLEX", "IF_COMPLEX_PRINT", "IF_COMPLEX_CALL", "IF_COMPLEX_BLOCK", "IF_COMPLEX_EXEC", "IF_COMPLEX_POST", "IF_COMPLEX_BREAK":
+		case OpIfComplex:
 			if s.evalLogic(s.expandVars(ins.Value), pkt) {
 				lastIfMet = true
-				if s.handleAction(ins.Op, ins.Message, ins.Value, pkt) {
+				if s.handleAction(ins.Message, ins.Value, pkt) {
 					return true
 				}
 			} else {
 				lastIfMet = false
 			}
-		case "SLEEP":
+		case OpSleep:
 			if ms, err := strconv.Atoi(s.expandVars(ins.Value)); err == nil {
 				time.Sleep(time.Duration(ms) * time.Millisecond)
 			}
-		case "CALL":
+		case OpCall:
 			if f, ok := s.Functions[ins.Value]; ok {
 				if s.execute(f, pkt) {
 					return true
 				}
 			}
-		case "PRINT":
+		case OpPrint:
 			fmt.Printf("[%s] %s\n", s.Name(), s.expandVars(ins.Message))
-		case "LOG":
+		case OpLog:
 			s.logToFile(s.expandVars(ins.Message))
-		case "FETCH":
+		case OpFetch:
 			go http.Get(s.expandVars(ins.Value))
-		case "IF_MALICIOUS":
+		case OpIfMalicious:
 			if pkt.IsMalicious {
 				lastIfMet = true
 				fmt.Printf("[%s] ALERT: %s (Target: %s)\n", s.Name(), s.expandVars(ins.Message), pkt.DstIP)
 			} else {
 				lastIfMet = false
 			}
-		case "IF_PROTO":
+		case OpIfProto:
 			if strings.EqualFold(pkt.Protocol, s.expandVars(ins.Value)) {
 				lastIfMet = true
 				fmt.Printf("[%s] %s\n", s.Name(), s.expandVars(ins.Message))
 			} else {
 				lastIfMet = false
 			}
-		case "IF_EXT":
+		case OpIfExt:
 			if s.evalExtCondition(ins.Value, pkt) {
 				lastIfMet = true
 				fmt.Printf("[%s] %s\n", s.Name(), s.expandVars(ins.Message))
 			} else {
 				lastIfMet = false
 			}
-		case "IF_EXT_CALL":
+		case OpIfExtCall:
 			if s.evalExtCondition(ins.Value, pkt) {
 				lastIfMet = true
 				if f, ok := s.Functions[ins.Value]; ok {
@@ -244,7 +290,7 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			} else {
 				lastIfMet = false
 			}
-		case "IF_MALICIOUS_CALL":
+		case OpIfMaliciousCall:
 			if pkt.IsMalicious {
 				lastIfMet = true
 				if f, ok := s.Functions[ins.Value]; ok {
@@ -255,15 +301,15 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			} else {
 				lastIfMet = false
 			}
-		case "ELSE":
+		case OpElse:
 			if !lastIfMet {
 				if s.handleElseAction(ins, pkt) {
 					return true
 				}
 			}
-		case "BLOCK":
+		case OpBlock:
 			s.killProcess(pkt)
-		case "IF_MALICIOUS_BLOCK":
+		case OpIfMaliciousBlock:
 			if pkt.IsMalicious {
 				lastIfMet = true
 				s.killProcess(pkt)
@@ -275,49 +321,47 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 	return false
 }
 
-func (s *ScriptPlugin) handleAction(op, message, value string, pkt *types.PacketData) bool {
+func (s *ScriptPlugin) handleAction(message, value string, pkt *types.PacketData) bool {
 	msg := s.expandVars(message)
-	if strings.HasPrefix(op, "IF_COMPLEX_") {
-		action := strings.TrimPrefix(op, "IF_COMPLEX_")
-		switch action {
-		case "BREAK":
-			return true
-		case "PRINT":
-			fmt.Printf("[%s] %s\n", s.Name(), msg)
-		case "CALL":
-			if f, ok := s.Functions[message]; ok {
-				return s.execute(f, pkt)
-			}
-		case "BLOCK":
-			s.killProcess(pkt)
-		case "EXEC":
-			var cmd *exec.Cmd
-			if runtime.GOOS == "windows" {
-				cmd = exec.Command("cmd", "/C", msg)
-			} else {
-				cmd = exec.Command("sh", "-c", msg)
-			}
-			go cmd.Run()
-			fmt.Printf("[%s] 🚀 EXEC: %s\n", s.Name(), msg)
-		case "POST":
-			parts := strings.SplitN(msg, " ", 2)
-			if len(parts) == 2 {
-				url, body := parts[0], parts[1]
-				go func(u, b string, h map[string]string) {
-					req, err := http.NewRequest("POST", u, strings.NewReader(b))
-					if err != nil || req == nil {
-						return
-					}
-					req.Header.Set("Content-Type", "application/json")
-					for k, v := range h {
-						req.Header.Set(k, v)
-					}
-					resp, err := http.DefaultClient.Do(req)
-					if err == nil {
-						resp.Body.Close()
-					}
-				}(url, body, s.headers)
-			}
+	// value contains the specific complex action code from compiler
+	switch value {
+	case "BREAK":
+		return true
+	case "PRINT":
+		fmt.Printf("[%s] %s\n", s.Name(), msg)
+	case "CALL":
+		if f, ok := s.Functions[message]; ok {
+			return s.execute(f, pkt)
+		}
+	case "BLOCK":
+		s.killProcess(pkt)
+	case "EXEC":
+		var cmd *exec.Cmd
+		if runtime.GOOS == "windows" {
+			cmd = exec.Command("cmd", "/C", msg)
+		} else {
+			cmd = exec.Command("sh", "-c", msg)
+		}
+		go cmd.Run()
+		fmt.Printf("[%s] 🚀 EXEC: %s\n", s.Name(), msg)
+	case "POST":
+		parts := strings.SplitN(msg, " ", 2)
+		if len(parts) == 2 {
+			url, body := parts[0], parts[1]
+			go func(u, b string, h map[string]string) {
+				req, err := http.NewRequest("POST", u, strings.NewReader(b))
+				if err != nil || req == nil {
+					return
+				}
+				req.Header.Set("Content-Type", "application/json")
+				for k, v := range h {
+					req.Header.Set(k, v)
+				}
+				resp, err := http.DefaultClient.Do(req)
+				if err == nil {
+					resp.Body.Close()
+				}
+			}(url, body, s.headers)
 		}
 	}
 	return false
@@ -388,7 +432,7 @@ func (s *ScriptPlugin) evalLogic(expr string, pkt *types.PacketData) bool {
 func (s *ScriptPlugin) handleElseAction(ins instruction, pkt *types.PacketData) bool {
 	msg := s.expandVars(ins.Message)
 	val := s.expandVars(ins.Value)
-	switch strings.ToUpper(ins.Op) {
+	switch ins.Value { // For ELSE, Value contains the specific action sub-type
 	case "ELSE_PRINT":
 		fmt.Printf("[%s] %s\n", s.Name(), msg)
 	case "ELSE_CALL":
@@ -473,10 +517,10 @@ func (s *ScriptPlugin) logToFile(msg string) {
 }
 
 func (s *ScriptPlugin) evalMath(expr string) string {
-	expr = strings.ReplaceAll(expr, " ", "")
 	operators := []string{"+", "-", "*", "/"}
 	for _, op := range operators {
 		if strings.Contains(expr, op) {
+			expr = strings.ReplaceAll(expr, " ", "")
 			parts := strings.Split(expr, op)
 			if len(parts) != 2 {
 				continue

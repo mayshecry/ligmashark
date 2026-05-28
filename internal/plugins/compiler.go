@@ -64,7 +64,7 @@ func Compile(srcPath string) error {
 			stack = stack[:len(stack)-1]
 			ctrl := ctrlStack[len(ctrlStack)-1]
 			ctrlStack = ctrlStack[:len(ctrlStack)-1]
-			stack[len(stack)-1] = append(stack[len(stack)-1], instruction{Op: "LOOP", Value: ctrl.val, Body: body})
+			stack[len(stack)-1] = append(stack[len(stack)-1], instruction{Op: OpLoop, Value: ctrl.val, Body: body})
 			continue
 		}
 
@@ -82,7 +82,7 @@ func Compile(srcPath string) error {
 			stack = stack[:len(stack)-1]
 			ctrl := ctrlStack[len(ctrlStack)-1]
 			ctrlStack = ctrlStack[:len(ctrlStack)-1]
-			stack[len(stack)-1] = append(stack[len(stack)-1], instruction{Op: "WHILE", Value: ctrl.val, Body: body})
+			stack[len(stack)-1] = append(stack[len(stack)-1], instruction{Op: OpWhile, Value: ctrl.val, Body: body})
 			continue
 		}
 
@@ -113,94 +113,94 @@ func Compile(srcPath string) error {
 		case "USE":
 			path := strings.TrimSuffix(parts[1], ";")
 			imports = append(imports, path)
-			ins.Op = "USE"
+			ins.Op = OpUse
 			ins.Value = path
 		case "BREAK":
-			ins.Op = "BREAK"
+			ins.Op = OpBreak
 		case "TIMER_START":
-			ins.Op = "TIMER_START"
+			ins.Op = OpTimerStart
 		case "TIMER_END":
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: TIMER_END requires a variable to store result", lineNum)
 			}
-			ins.Op = "TIMER_END"
+			ins.Op = OpTimerEnd
 			ins.Value = parts[1]
 		case "GET_ISP":
 			if len(parts) < 3 {
 				return fmt.Errorf("line %d: GET_ISP requires IP and variable", lineNum)
 			}
-			ins.Op, ins.Value, ins.Message = "GET_ISP", parts[1], parts[2]
+			ins.Op, ins.Value, ins.Message = OpGetISP, parts[1], parts[2]
 		case "SET_HEADER":
 			if len(parts) < 3 {
 				return fmt.Errorf("line %d: SET_HEADER requires key and value", lineNum)
 			}
-			ins.Op, ins.Value, ins.Message = "SET_HEADER", parts[1], strings.Join(parts[2:], " ")
+			ins.Op, ins.Value, ins.Message = OpSetHeader, parts[1], strings.Join(parts[2:], " ")
 		case "GET_HEADER":
 			if len(parts) < 3 {
 				return fmt.Errorf("line %d: GET_HEADER requires key and variable", lineNum)
 			}
-			ins.Op, ins.Value, ins.Message = "GET_HEADER", parts[1], parts[2]
+			ins.Op, ins.Value, ins.Message = OpGetHeader, parts[1], parts[2]
 		case "SET":
 			if len(parts) < 3 {
 				return fmt.Errorf("line %d: SET requires var and val", lineNum)
 			}
 			if parts[2] == "=" {
-				ins.Op = "SET_EXPR"
+				ins.Op = OpSetExpr
 				ins.Value = parts[1]
 				ins.Message = strings.Join(parts[3:], " ")
 			} else {
-				ins.Op, ins.Value, ins.Message = "SET", parts[1], strings.Join(parts[2:], " ")
+				ins.Op, ins.Value, ins.Message = OpSet, parts[1], strings.Join(parts[2:], " ")
 			}
 		case "TIME":
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: TIME requires a variable name", lineNum)
 			}
-			ins.Op, ins.Value = "TIME", parts[1]
+			ins.Op, ins.Value = OpTime, parts[1]
 		case "INCREMENT":
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: INCREMENT requires a variable", lineNum)
 			}
-			ins.Op, ins.Value = "INCREMENT", parts[1]
+			ins.Op, ins.Value = OpIncrement, parts[1]
 		case "BLOCK":
-			ins.Op = "BLOCK"
+			ins.Op = OpBlock
 		case "BASED":
-			ins.Op, ins.Message = "BASED", strings.Join(parts[1:], " ")
+			ins.Op, ins.Message = OpBased, strings.Join(parts[1:], " ")
 		case "SLOP":
-			ins.Op, ins.Message = "SLOP", strings.Join(parts[1:], " ")
+			ins.Op, ins.Message = OpSlop, strings.Join(parts[1:], " ")
 		case "TELEMETRY_DETECTED":
-			ins.Op, ins.Message = "TELEMETRY_DETECTED", strings.Join(parts[1:], " ")
+			ins.Op, ins.Message = OpTelemetry, strings.Join(parts[1:], " ")
 		case "REJECT_MICROSOFT":
-			ins.Op = "REJECT_MICROSOFT"
+			ins.Op = OpRejectMS
 		case "BashKILL_PID":
-			ins.Op = "BashKILL_PID"
+			ins.Op = OpBashKill
 		case "DROP_ALL_PACKETS":
-			ins.Op = "DROP_ALL_PACKETS"
+			ins.Op = OpDropAll
 		case "NUKE_CONNECTION":
-			ins.Op = "NUKE_CONNECTION"
+			ins.Op = OpNuke
 		case "HATE":
-			ins.Op, ins.Message = "HATE", strings.Join(parts[1:], " ")
+			ins.Op, ins.Message = OpHate, strings.Join(parts[1:], " ")
 		case "REDIRECT":
 			if len(parts) < 3 {
 				return fmt.Errorf("line %d: REDIRECT requires 'port [num]'", lineNum)
 			}
-			ins.Op, ins.Value = "REDIRECT", parts[2]
+			ins.Op, ins.Value = OpRedirect, parts[2]
 		case "SPOOF":
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: SPOOF requires an IP", lineNum)
 			}
-			ins.Op, ins.Value = "SPOOF", parts[1]
+			ins.Op, ins.Value = OpSpoof, parts[1]
 		case "ALERT":
-			ins.Op, ins.Message = "ALERT", strings.Join(parts[1:], " ")
+			ins.Op, ins.Message = OpAlert, strings.Join(parts[1:], " ")
 		case "EXEC":
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: EXEC requires a command", lineNum)
 			}
-			ins.Op, ins.Message = "EXEC", strings.Join(parts[1:], " ")
+			ins.Op, ins.Message = OpExec, strings.Join(parts[1:], " ")
 		case "INPUT":
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: INPUT requires a variable name", lineNum)
 			}
-			ins.Op = "INPUT"
+			ins.Op = OpInput
 			ins.Value = parts[1]
 			ins.Message = strings.Join(parts[2:], " ")
 		case "HTTP":
@@ -212,26 +212,26 @@ func Compile(srcPath string) error {
 				if len(parts) < 4 {
 					return fmt.Errorf("line %d: HTTP GET requires URL and variable name", lineNum)
 				}
-				ins.Op, ins.Value, ins.Message = "HTTP_GET", parts[2], parts[3]
+				ins.Op, ins.Value, ins.Message = OpFetch, parts[2], parts[3]
 			} else if method == "POST" {
 				if len(parts) < 4 {
 					return fmt.Errorf("line %d: HTTP POST requires URL and body", lineNum)
 				}
-				ins.Op = "POST"
+				ins.Op = OpPost
 				ins.Message = parts[2] + " " + strings.Join(parts[3:], " ")
 			}
 		case "PRINT":
-			ins.Op, ins.Message = "PRINT", strings.Join(parts[1:], " ")
+			ins.Op, ins.Message = OpPrint, strings.Join(parts[1:], " ")
 		case "SLEEP":
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: SLEEP requires ms", lineNum)
 			}
-			ins.Op, ins.Value = "SLEEP", parts[1]
+			ins.Op, ins.Value = OpSleep, parts[1]
 		case "CALL":
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: CALL requires a name", lineNum)
 			}
-			ins.Op, ins.Value = "CALL", parts[1]
+			ins.Op, ins.Value = OpCall, parts[1]
 		case "ELSE":
 			if !lastWasIf {
 				return fmt.Errorf("line %d: ELSE must follow an IF statement", lineNum)
@@ -239,25 +239,27 @@ func Compile(srcPath string) error {
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: ELSE missing action", lineNum)
 			}
+			ins.Op = OpElse
 			action := strings.ToUpper(parts[1])
-			ins.Op = "ELSE_" + action
 			if action == "PRINT" {
+				ins.Value = "ELSE_PRINT"
 				ins.Message = strings.Join(parts[2:], " ")
 			} else if action == "HTTP" && len(parts) > 3 && strings.ToUpper(parts[2]) == "POST" {
-				ins.Op = "ELSE_POST"
+				ins.Value = "ELSE_POST"
 				ins.Message = parts[3] + " " + strings.Join(parts[4:], " ")
 			} else if action == "CALL" || action == "BLOCK" || action == "BREAK" {
+				ins.Value = "ELSE_" + action
 				if len(parts) > 2 {
-					ins.Value = parts[2]
+					ins.Message = parts[2]
 				}
 			}
 		case "LOG":
-			ins.Op, ins.Message = "LOG", strings.Join(parts[1:], " ")
+			ins.Op, ins.Message = OpLog, strings.Join(parts[1:], " ")
 		case "FETCH":
 			if len(parts) < 2 {
 				return fmt.Errorf("line %d: FETCH requires a URL", lineNum)
 			}
-			ins.Op, ins.Value = "FETCH", parts[1]
+			ins.Op, ins.Value = OpFetch, parts[1]
 		case "IF":
 			if len(parts) < 3 {
 				return fmt.Errorf("line %d: IF missing arguments", lineNum)
@@ -280,12 +282,13 @@ func Compile(srcPath string) error {
 				if actionIdx+1 >= len(parts) || strings.ToUpper(parts[actionIdx+1]) != "POST" {
 					return fmt.Errorf("line %d: HTTP must be followed by POST", lineNum)
 				}
-				ins.Op = "IF_COMPLEX_POST"
+				ins.Op = OpIfComplex
 				ins.Value = strings.Join(parts[1:actionIdx], " ")
 				ins.Message = parts[actionIdx+2] + " " + strings.Join(parts[actionIdx+3:], " ")
 			} else {
-				ins.Op = "IF_COMPLEX_" + strings.ToUpper(parts[actionIdx])
-				ins.Value = strings.Join(parts[1:actionIdx], " ")
+				ins.Op = OpIfComplex
+				ins.Value = strings.Join(parts[1:actionIdx], " ") // Condition
+				ins.Value = strings.ToUpper(parts[actionIdx])     // Specific Action
 				ins.Message = strings.Join(parts[actionIdx+1:], " ")
 			}
 
