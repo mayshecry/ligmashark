@@ -21,7 +21,7 @@ func StartMITM(iface string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("bettercap is already running")
 	}
 
-	args := []string{"-eval", "arp.spoof on; net.sniff on"}
+	args := []string{"-no-colors", "-eval", "arp.spoof on; net.sniff on"}
 
 	if iface != "" && iface != "any" {
 		args = append([]string{"-iface", iface}, args...)

@@ -52,6 +52,7 @@ func main() {
 
 	processes := make(map[int32]*types.ProcItem)
 	ispCache := make(map[string]string)
+	hostnameCache := make(map[string]string)
 	threatBlocklist := network.LoadThreatBlocklist()
 
 	loadedPlugins, err := plugins.LoadPlugins("./plugins")
@@ -253,6 +254,10 @@ func main() {
 					processes[pid].Packets = processes[pid].Packets[len(processes[pid].Packets)-1000:]
 				}
 				mu.Unlock()
+
+				if network.IsLocalIP(remoteIP) {
+					pkt.Hostname = network.LookupHostname(remoteIP, hostnameCache)
+				}
 			}
 		}
 	}()

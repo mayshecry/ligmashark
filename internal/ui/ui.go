@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -110,6 +109,7 @@ type Model struct {
 	AvailableModels      []string
 	SelectedModelIdx     int
 	SelectedThemeIdx     int
+	SortMode             int
 }
 
 var Themes = []struct {
@@ -157,6 +157,7 @@ func NewModel(processes map[int32]*types.ProcItem, mu *sync.RWMutex, sysInfo typ
 		UseAI:                true,
 		UseMITMSetting:       true,
 		AvailableModels:      []string{"qwen2.5:0.5b", "qwen2:0.5b", "phi3:mini", "tinyllama", "smollm:135m", "llama3.2:1b", "gemma:2b", "orca-mini", "granite-code:3b", "deepseek-coder:1.3b", "stable-code:3b"},
+		SortMode:             0,
 	}
 	m.loadConfig()
 	return m
@@ -524,6 +525,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateViewport()
 			case "a":
 				m.AutoScroll = !m.AutoScroll
+			case "o":
+				m.SortMode = (m.SortMode + 1) % 3
+				m.refreshList()
+			case "X":
+				m.ActiveFilter = ""
+				m.ActiveProcessSearch = ""
+				m.ActiveProtocolFilter = "ALL"
+				m.refreshList()
+				m.updateViewport()
+			case "1":
+				m.ActiveProtocolFilter = "ALL"
+				m.updateViewport()
+			case "2":
+				m.ActiveProtocolFilter = "TCP"
+				m.updateViewport()
+			case "3":
+				m.ActiveProtocolFilter = "UDP"
+				m.updateViewport()
+			case "4":
+				m.ActiveProtocolFilter = "ICMP"
+				m.updateViewport()
 			case "c":
 				m.Mu.Lock()
 				if p, ok := m.Processes[m.SelectedPid]; ok {
@@ -1190,10 +1212,17 @@ func (m *Model) refreshList() {
 	m.Mu.RUnlock()
 
 	sort.Slice(items, func(i, j int) bool {
-		if len(items[i].Packets) != len(items[j].Packets) {
-			return len(items[i].Packets) > len(items[j].Packets)
+		switch m.SortMode {
+		case 1:
+			return items[i].PID < items[j].PID
+		case 2:
+			return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
+		default:
+			if len(items[i].Packets) != len(items[j].Packets) {
+				return len(items[i].Packets) > len(items[j].Packets)
+			}
+			return items[i].PID < items[j].PID
 		}
-		return items[i].PID < items[j].PID
 	})
 
 	filteredItems := make([]types.ProcItem, 0)
@@ -1402,7 +1431,7 @@ func (m *Model) View() string {
 			lipgloss.NewStyle().Foreground(lipgloss.Color(m.getTheme().Accent)).Render(m.ActiveProcessSearch) + " "
 	}
 
-	legend := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" [j/k] Nav [Enter] View [g] Graph [n] Map [t] Traffic [;] Search [/] Filter [S] Settings [?] Help ")
+	legend := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" [1-4] Proto [o] Sort [X] Reset [j/k] Nav [Enter] View [g] Graph [n] Map [t] Traffic [;] Search [/] Filter [S] Settings [?] Help ")
 	statusLine := lipgloss.JoinHorizontal(lipgloss.Left, captureBar, scrollBar, graphBtn, mapBtn, mitmBar, processFilterBar, protoFilterBar, activeFilterBar, activeProcessSearchBar)
 
 	filler := strings.Repeat(" ", max(0, m.Width-lipgloss.Width(statusLine)-lipgloss.Width(settingsBtn)))
@@ -1717,43 +1746,61 @@ func formatBytes(b uint64) string {
 }
 
 func (m *Model) renderLandingPage() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(m.getTheme().Primary)).SetString("Ligmashark")
-	author := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("Created by val (@mayshecry) on GitHub")
+	theme := m.getTheme()
+	primary := lipgloss.Color(theme.Primary)
+	accent := lipgloss.Color(theme.Accent)
 
-	platformWarn := ""
-	if runtime.GOOS == "windows" {
-		platformWarn = "\n\n⚠️  Note: You are on Windows. For the full experience (including plugin support and native elevation), Linux is highly recommended."
-	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(primary).Padding(0, 2).Render("🦈 LIGMASHARK")
+	author := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Created by val (@mayshecry)")
 
-	explanation := explStyle.Render(
-		"Ligmashark is a powerful, terminal-based network analyzer." +
-			"It maps real-time network traffic to local processes (PIDs), " +
-			"identifies destination ISPs, and provides a Neovim-inspired TUI " +
-			"for deep packet inspection and payload analysis." + platformWarn)
+	disclaimer := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("196")).
+		Bold(true).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("196")).
+		Padding(0, 1).
+		MarginTop(1).
+		Render("⚠️ LEGAL DISCLAIMER: Use MITM features responsibly. Intercepting traffic on networks\nyou do not own or have explicit permission to audit is illegal and unethical.")
 
-	specs := lipgloss.NewStyle().Padding(1, 2).SetString(fmt.Sprintf(`
-OS: %s
-Hostname: %s
-CPU: %s
-Memory: %s
-Uptime: %s
-Go Version: %s
-`, m.SystemInfo.OS, m.SystemInfo.Hostname, m.SystemInfo.CPU, m.SystemInfo.Memory, m.SystemInfo.Uptime, m.SystemInfo.GoVersion))
+	desc := lipgloss.NewStyle().Width(70).Align(lipgloss.Center).MarginTop(1).Render(
+		"A high-performance TUI network analyzer with local AI-powered packet inspection.\n" +
+			"Map connections to processes, analyze ISPs, and assemble streams in real-time.")
 
-	ollamaStatus := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).SetString(m.OllamaStatus)
+	infoKeyStyle := lipgloss.NewStyle().Foreground(accent).Bold(true)
+	infoValStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).SetString("\n[Enter/h] Start Monitoring • [q] Quit")
+	specs := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Padding(1, 4).
+		MarginTop(1).
+		Render(lipgloss.JoinVertical(lipgloss.Left,
+			fmt.Sprintf("%s %s", infoKeyStyle.Render("OS:      "), infoValStyle.Render(m.SystemInfo.OS)),
+			fmt.Sprintf("%s %s", infoKeyStyle.Render("HOST:    "), infoValStyle.Render(m.SystemInfo.Hostname)),
+			fmt.Sprintf("%s %s", infoKeyStyle.Render("CPU:     "), infoValStyle.Render(m.SystemInfo.CPU)),
+			fmt.Sprintf("%s %s", infoKeyStyle.Render("RAM:     "), infoValStyle.Render(m.SystemInfo.Memory)),
+			fmt.Sprintf("%s %s", infoKeyStyle.Render("UPTIME:  "), infoValStyle.Render(m.SystemInfo.Uptime)),
+			fmt.Sprintf("%s %s", infoKeyStyle.Render("VERSION: "), infoValStyle.Render(m.SystemInfo.GoVersion)),
+		))
 
-	content := lipgloss.JoinVertical(lipgloss.Center,
-		title.Render(),
-		author.Render(),
-		explanation,
-		ollamaStatus.Render(),
-		specs.Render(),
-		help.Render(),
+	ollama := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).MarginTop(1).Render("✨ " + m.OllamaStatus)
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginTop(1).Render("[Enter/h] Start Monitoring • [q] Quit")
+
+	mainLayout := lipgloss.JoinVertical(lipgloss.Center,
+		title,
+		author,
+		desc,
+		specs,
+		disclaimer,
+		ollama,
+		help,
 	)
 
-	return landingPageStyle.Copy().BorderForeground(lipgloss.Color(m.getTheme().Primary)).Width(m.Width - 4).Height(m.Height - 2).Render(content)
+	return landingPageStyle.Copy().
+		BorderForeground(primary).
+		Width(m.Width - 4).
+		Height(m.Height - 2).
+		Render(mainLayout)
 }
 
 func (m *Model) renderGlobalTrafficMode() string {
@@ -1887,11 +1934,12 @@ func (m *Model) renderNetworkTopology() string {
 
 	type node struct {
 		children map[string]int
+		display  map[string]string
 		total    int
 	}
 
 	topology := make(map[string]node)
-	topology["This Machine"] = node{children: make(map[string]int)}
+	topology["This Machine"] = node{children: make(map[string]int), display: make(map[string]string)}
 
 	for _, p := range m.Processes {
 		for _, pkt := range p.Packets {
@@ -1907,15 +1955,27 @@ func (m *Model) renderNetworkTopology() string {
 				root := topology["This Machine"]
 				root.children[target]++
 				root.total++
+				if pkt.Hostname != "" && network.IsLocalIP(target) {
+					root.display[target] = fmt.Sprintf("%s (%s)", pkt.Hostname, target)
+				}
 				topology["This Machine"] = root
 			} else if network.IsMITMActive() {
-				if _, ok := topology[pkt.SrcIP]; !ok {
-					topology[pkt.SrcIP] = node{children: make(map[string]int)}
+				srcDisplay := pkt.SrcIP
+				if !network.IsHostIP(pkt.SrcIP) {
+					dev := network.IdentifyDevice(pkt.SrcMAC)
+					if pkt.Hostname != "" && network.IsLocalIP(pkt.SrcIP) {
+						srcDisplay = fmt.Sprintf("%s (%s)", pkt.Hostname, pkt.SrcIP)
+					} else if !strings.HasPrefix(dev, "OUI:") && dev != "Unknown Device" {
+						srcDisplay = fmt.Sprintf("%s (%s)", pkt.SrcIP, dev)
+					}
 				}
-				root := topology[pkt.SrcIP]
+				if _, ok := topology[srcDisplay]; !ok {
+					topology[srcDisplay] = node{children: make(map[string]int), display: make(map[string]string)}
+				}
+				root := topology[srcDisplay]
 				root.children[pkt.DstIP]++
 				root.total++
-				topology[pkt.SrcIP] = root
+				topology[srcDisplay] = root
 			}
 		}
 	}
@@ -1929,10 +1989,14 @@ func (m *Model) renderNetworkTopology() string {
 	}
 	var localChildren, externalChildren []childInfo
 	for child, count := range topology["This Machine"].children {
+		displayName := child
+		if d, ok := topology["This Machine"].display[child]; ok {
+			displayName = d
+		}
 		if network.IsLocalIP(child) {
-			localChildren = append(localChildren, childInfo{child, count})
+			localChildren = append(localChildren, childInfo{displayName, count})
 		} else {
-			externalChildren = append(externalChildren, childInfo{child, count})
+			externalChildren = append(externalChildren, childInfo{displayName, count})
 		}
 	}
 	sort.Slice(localChildren, func(i, j int) bool { return localChildren[i].count > localChildren[j].count })

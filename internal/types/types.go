@@ -19,6 +19,7 @@ type PacketData struct {
 	Service     string
 	Payload     string
 	ProcessName string
+	Hostname    string
 	PID         int32
 	AIAnalysis  string
 	IsMalicious bool

@@ -17,6 +17,8 @@ var (
 	localIPsMu  sync.RWMutex
 	connCache   []netutil.ConnectionStat
 	connCacheMu sync.RWMutex
+	hostMu      sync.RWMutex
+	hostCache   = make(map[string]string)
 )
 
 func init() {
@@ -233,4 +235,24 @@ func IdentifyDevice(mac string) string {
 		return "Realtek"
 	}
 	return "OUI:" + prefix
+}
+
+func LookupHostname(ip string, cache map[string]string) string {
+	hostMu.RLock()
+	if val, ok := hostCache[ip]; ok {
+		hostMu.RUnlock()
+		return val
+	}
+	hostMu.RUnlock()
+
+	go func(target string) {
+		names, err := net.LookupAddr(target)
+		if err == nil && len(names) > 0 {
+			hostMu.Lock()
+			hostCache[target] = strings.TrimSuffix(names[0], ".")
+			hostMu.Unlock()
+		}
+	}(ip)
+
+	return ""
 }
