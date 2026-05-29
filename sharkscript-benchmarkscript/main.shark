@@ -1,0 +1,8 @@
+#Fastest possible count to a million in Sharkscript
+# Use ligmashark --compile main.shark to compile it
+
+TIMER_START
+PARALLEL LOOP 1000000
+ENDLOOP
+TIMER_END duration
+PRINT Counted to a million in %duration%s
