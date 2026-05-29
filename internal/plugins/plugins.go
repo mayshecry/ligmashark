@@ -103,7 +103,7 @@ type instruction struct {
 	Value     string
 	Message   string
 	Body      []instruction
-	Condition *LogicExpr // Pre-compiled logic evaluation tree
+	Condition *LogicExpr
 	IntValue  int
 	IsStatic  bool
 }
@@ -112,7 +112,7 @@ type CompiledScript struct {
 	Main      []instruction
 	Functions map[string][]instruction
 	Imports   []string
-	Symbols   []string // Variable name mapping
+	Symbols   []string
 }
 type ScriptPlugin struct {
 	Filename     string
@@ -217,7 +217,6 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			if !ok || curr == "" {
 				curr = "0"
 			}
-			// Specialized Fast-path for integers
 			iv, _ := strconv.Atoi(curr)
 			s.vars[ins.Value] = strconv.Itoa(iv + 1)
 			s.mu.Unlock()
@@ -257,13 +256,29 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			}
 			wg.Wait()
 		case OpBased:
-			fmt.Printf("[%s] 🗿 BASED: %s\n", s.Name(), s.expandVars(ins.Message))
+			msg := ins.Message
+			if !ins.IsStatic {
+				msg = s.expandVars(ins.Message)
+			}
+			fmt.Printf("[%s] 🗿 BASED: %s\n", s.Name(), msg)
 		case OpSlop:
-			fmt.Printf("[%s] 🤮 SLOP DETECTED: %s\n", s.Name(), s.expandVars(ins.Message))
+			msg := ins.Message
+			if !ins.IsStatic {
+				msg = s.expandVars(ins.Message)
+			}
+			fmt.Printf("[%s] 🤮 SLOP DETECTED: %s\n", s.Name(), msg)
 		case OpTelemetry:
-			fmt.Printf("[%s] 📡 TELEMETRY DETECTED: %s\n", s.Name(), s.expandVars(ins.Message))
+			msg := ins.Message
+			if !ins.IsStatic {
+				msg = s.expandVars(ins.Message)
+			}
+			fmt.Printf("[%s] 📡 TELEMETRY DETECTED: %s\n", s.Name(), msg)
 		case OpHate:
-			fmt.Printf("[%s] 💢 HATE: %s\n", s.Name(), strings.ToUpper(s.expandVars(ins.Message)))
+			msg := ins.Message
+			if !ins.IsStatic {
+				msg = s.expandVars(ins.Message)
+			}
+			fmt.Printf("[%s] 💢 HATE: %s\n", s.Name(), strings.ToUpper(msg))
 		case OpRejectMS:
 			if strings.Contains(strings.ToLower(pkt.ISP), "microsoft") {
 				s.killProcess(pkt)
@@ -290,9 +305,13 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 			pkt.SrcIP = expandedVal
 			fmt.Printf("[%s] 🎭 SPOOFED Source IP to %s\n", s.Name(), expandedVal)
 		case OpAlert:
+			msg := ins.Message
+			if !ins.IsStatic {
+				msg = s.expandVars(ins.Message)
+			}
 			alertStyle := "\033[1;31m" // Bold Red
 			reset := "\033[0m"
-			fmt.Printf("[%s] %s🚨 ALERT: %s%s\n", s.Name(), alertStyle, s.expandVars(ins.Message), reset)
+			fmt.Printf("[%s] %s🚨 ALERT: %s%s\n", s.Name(), alertStyle, msg, reset)
 		case OpExec:
 			expandedMsg := s.expandVars(ins.Message)
 			var cmd *exec.Cmd
@@ -413,7 +432,11 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 				}
 			}
 		case OpPrint:
-			fmt.Printf("[%s] %s\n", s.Name(), s.expandVars(ins.Message))
+			msg := ins.Message
+			if !ins.IsStatic {
+				msg = s.expandVars(ins.Message)
+			}
+			fmt.Printf("[%s] %s\n", s.Name(), msg)
 		case OpLog:
 			s.logToFile(s.expandVars(ins.Message))
 		case OpFetch:
@@ -645,11 +668,11 @@ func (s *ScriptPlugin) evalMath(expr string) string {
 }
 
 func (s *ScriptPlugin) expandVars(input string) string {
-	idx := strings.IndexByte(input, '%')
-	if idx == -1 {
+	if len(input) < 3 || strings.IndexByte(input, '%') == -1 {
 		return input
 	}
 
+	idx := strings.IndexByte(input, '%')
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var sb strings.Builder

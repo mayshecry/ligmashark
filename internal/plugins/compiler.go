@@ -43,7 +43,6 @@ func Compile(srcPath string) error {
 			return &LogicExpr{Op: LogAnd, Left: compileLogic(parts[0]), Right: compileLogic(parts[1])}
 		}
 
-		// Leaf nodes
 		if strings.EqualFold(expr, "MALICIOUS") {
 			return &LogicExpr{Op: LogMalicious}
 		}
@@ -77,15 +76,13 @@ func Compile(srcPath string) error {
 		return nil
 	}
 
-	// Helper to pre-process instruction fields
 	prepare := func(ins *instruction) {
-		if !strings.Contains(ins.Value, "%") {
+		if !strings.Contains(ins.Value, "%") && !strings.Contains(ins.Message, "%") {
 			ins.IsStatic = true
 			if v, err := strconv.Atoi(ins.Value); err == nil {
 				ins.IntValue = v
 			}
 		}
-		// Compile conditions if this is a control flow instruction
 		if ins.Op == OpWhile || (ins.Op >= OpIfPrint && ins.Op <= OpIfBreak) {
 			ins.Condition = compileLogic(ins.Value)
 		}
@@ -386,6 +383,7 @@ func Compile(srcPath string) error {
 		}
 
 		lastWasIf = currentIsIf
+		prepare(&ins)
 		stack[len(stack)-1] = append(stack[len(stack)-1], ins)
 	}
 

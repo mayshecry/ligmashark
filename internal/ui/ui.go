@@ -2182,7 +2182,6 @@ func (m *Model) renderBettercapMode() string {
 		exportStatus = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" | " + m.ExportStatus)
 	}
 
-	// Adjust viewport size for the new layout
 	m.BettercapViewport.Width = m.Width - sidebarWidth - 10
 	m.BettercapViewport.Height = m.Height - 14
 
