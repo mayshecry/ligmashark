@@ -13,18 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"ligmashark/internal/network"
 	"ligmashark/internal/types"
 )
-
-var builderPool = sync.Pool{
-	New: func() interface{} {
-		return &strings.Builder{}
-	},
-}
 
 type OpCode uint8
 
@@ -238,11 +231,9 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 				}
 			}
 		case OpParallelLoop:
-			var count int
+			count := ins.IntValue
 			if !ins.IsStatic {
-				count, _ = strconv.Atoi(s.resolveOperand(&LogicExpr{Op: LogVar, Value: ins.Value}))
-			} else {
-				count = ins.IntValue
+				count, _ = strconv.Atoi(s.expandVars(ins.Value))
 			}
 			if count <= 0 {
 				continue
@@ -252,19 +243,16 @@ func (s *ScriptPlugin) execute(insts []instruction, pkt *types.PacketData) bool 
 				numWorkers = count
 			}
 			var wg sync.WaitGroup
-			var sharedIdx atomic.Int64
 			wg.Add(numWorkers)
 			for w := 0; w < numWorkers; w++ {
-				go func() {
+				go func(workerID int) {
 					defer wg.Done()
-					for {
-						i := sharedIdx.Add(1) - 1
-						if i >= int64(count) {
-							break
-						}
+					start := (count * workerID) / numWorkers
+					end := (count * (workerID + 1)) / numWorkers
+					for i := start; i < end; i++ {
 						s.execute(ins.Body, pkt)
 					}
-				}()
+				}(w)
 			}
 			wg.Wait()
 		case OpBased:
@@ -684,12 +672,12 @@ func (s *ScriptPlugin) expandVars(input string) string {
 		return input
 	}
 
-	sb := builderPool.Get().(*strings.Builder)
-	sb.Reset()
-	defer builderPool.Put(sb)
-	sb.Grow(len(input) + 8)
+	idx := strings.IndexByte(input, '%')
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var sb strings.Builder
+	sb.Grow(len(input) + 16)
 
-	var idx int
 	for {
 		idx = strings.IndexByte(input, '%')
 		if idx == -1 {
@@ -707,10 +695,7 @@ func (s *ScriptPlugin) expandVars(input string) string {
 		}
 
 		key := input[:end]
-		s.mu.RLock()
-		val, ok := s.vars[key]
-		s.mu.RUnlock()
-		if ok {
+		if val, ok := s.vars[key]; ok {
 			sb.WriteString(val)
 		} else {
 			sb.WriteString("%" + key + "%")
